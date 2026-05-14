@@ -1,5 +1,7 @@
-# 데이터 (gitignored)
-data/
+# 데이터 파일 무시, 폴더 구조(.gitkeep)는 유지
+data/**
+!data/*/
+!data/**/.gitkeep
 chroma_db/
 
 # 환경변수
