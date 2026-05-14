@@ -33,7 +33,7 @@ config.py               # 경로·상수 중앙화
 requirements.txt
 .env / .env.example     # .env는 gitignored
 
-data/                   # ⚠️ gitignored
+data/                   # ⚠️ 데이터 파일 gitignored, 폴더 구조(.gitkeep)는 Git 추적
   raw/                  # 원본, 읽기 전용
   processed/            # 전처리 결과
   references/           # RAG용 PDF
@@ -62,6 +62,7 @@ chroma_db/              # ⚠️ gitignored, 벡터 인덱스
   - 예: `hira_mental_health_seoul_20s_v1_20260513.csv`
 - "latest", "final", "최신" 같은 이름 금지
 - 데이터 파일 Git 커밋 금지
+- `.gitignore` 패턴: `data/**` + `!data/*/` + `!data/**/.gitkeep` (폴더 구조만 추적)
 
 ### 비밀 키
 - 모든 API 키는 `.env`. 코드 하드코딩 금지
