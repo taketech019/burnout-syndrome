@@ -12,7 +12,7 @@ st.set_page_config(
 st.header("CounsHelper - 상담 기록 분석 & 보고서 자동화 플랫폼")
 
 # ── 페이지 라우팅 ─────────────────────────────────────────────────────────────
-page = st.sidebar.selectbox("페이지", ["대시보드", "챗봇"])
+page = st.sidebar.selectbox("페이지", ["대시보드", "상담기록"])
 
 if page == "대시보드":
     st.info("대시보드 (구현 예정)")
