@@ -22,20 +22,21 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────
 CLIENTS = pd.DataFrame(
     {
-        "내담자 ID": ["C-001", "C-002", "C-003"],
-        "성별": ["여성", "남성", "여성"],
-        "연령대": ["30대", "20대", "40대"],
-        "지역": ["서울", "경기", "부산"],
-        "상담 유형": ["우울/불안", "불안", "중독"],
-        "최근 회기": ["3회기", "2회기", "5회기"],
-        "상태": ["검토 필요", "안정", "확인 필요"],
+        "내담자 ID": ["C-001", "C-002", "C-003", "C-004"],
+        "이름": ["김OO", "박OO", "이OO", "최OO"],
+        "성별": ["여성", "남성", "여성", "남성"],
+        "연령대": ["30대", "20대", "40대", "30대"],
+        "지역": ["서울", "경기", "부산", "서울"],
+        "상담 유형": ["우울/불안", "불안", "중독", "우울"],
+        "최근 회기": ["3회기", "2회기", "5회기", "1회기"],
+        "상태": ["검토 필요", "안정", "확인 필요", "초기 상담"],
     }
 )
 
 SESSIONS = pd.DataFrame(
     {
-        "내담자 ID": ["C-001", "C-001", "C-001", "C-002", "C-002", "C-003"],
-        "회기": ["1회기", "2회기", "3회기", "1회기", "2회기", "5회기"],
+        "내담자 ID": ["C-001", "C-001", "C-001", "C-002", "C-002", "C-003", "C-004"],
+        "회기": ["1회기", "2회기", "3회기", "1회기", "2회기", "5회기", "1회기"],
         "상담일": [
             "2026-05-02",
             "2026-05-09",
@@ -43,6 +44,7 @@ SESSIONS = pd.DataFrame(
             "2026-05-04",
             "2026-05-12",
             "2026-05-15",
+            "2026-05-10",
         ],
         "상담 주제": [
             "초기 상담",
@@ -51,6 +53,7 @@ SESSIONS = pd.DataFrame(
             "불안 호소",
             "대인관계 불안",
             "중독 관련 상담",
+            "우울감 호소",
         ],
         "보고서 상태": [
             "작성 완료",
@@ -59,6 +62,7 @@ SESSIONS = pd.DataFrame(
             "작성 완료",
             "검토 필요",
             "검토 필요",
+            "작성 완료",
         ],
     }
 )
@@ -198,13 +202,19 @@ GOAL_PROGRESS = pd.DataFrame(
 # Session State
 # ─────────────────────────────────────────────────────────────
 if "page" not in st.session_state:
-    st.session_state.page = "상담기록 작성"
+    st.session_state.page = "상담내역 기록·추가"
 
 if "selected_client" not in st.session_state:
     st.session_state.selected_client = "C-001"
 
 if "selected_session" not in st.session_state:
     st.session_state.selected_session = "3회기"
+
+if "client_search" not in st.session_state:
+    st.session_state.client_search = "C-001"
+
+if "record_mode" not in st.session_state:
+    st.session_state.record_mode = "existing"  # existing / new
 
 if "dialogue_rows" not in st.session_state:
     st.session_state.dialogue_rows = DEFAULT_DIALOGUE.copy()
@@ -220,16 +230,23 @@ def go_page(page_name: str):
     st.session_state.page = page_name
 
 
+def select_session(session_name: str):
+    st.session_state.selected_session = session_name
+    st.session_state.record_mode = "existing"
+
+
+def start_new_session():
+    st.session_state.record_mode = "new"
+    st.session_state.selected_session = "새 상담"
+
+
 def build_dialogue_text(dialogue_df: pd.DataFrame) -> str:
     lines = []
-
     for _, row in dialogue_df.iterrows():
         speaker = str(row.get("화자", "")).strip()
         utterance = str(row.get("발화", "")).strip()
-
         if speaker and utterance and utterance.lower() != "nan":
             lines.append(f"{speaker}: {utterance}")
-
     return "\n".join(lines)
 
 
@@ -243,6 +260,16 @@ def get_session_row():
         (SESSIONS["내담자 ID"] == st.session_state.selected_client)
         & (SESSIONS["회기"] == st.session_state.selected_session)
     ]
+    if row.empty:
+        return pd.Series(
+            {
+                "내담자 ID": st.session_state.selected_client,
+                "회기": "새 상담",
+                "상담일": datetime.now().strftime("%Y-%m-%d"),
+                "상담 주제": "",
+                "보고서 상태": "신규 작성",
+            }
+        )
     return row.iloc[0]
 
 
@@ -273,11 +300,11 @@ def make_json_export():
     export_data = {
         "client": st.session_state.selected_client,
         "session": st.session_state.selected_session,
+        "mode": st.session_state.record_mode,
         "dialogue": st.session_state.dialogue_rows.to_dict(orient="records"),
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "note": "Streamlit UI 목업용 더미 데이터입니다.",
     }
-
     return json.dumps(export_data, ensure_ascii=False, indent=2)
 
 
@@ -286,21 +313,13 @@ def clear_chat():
 
 
 def add_mock_answer(user_prompt: str):
-    st.session_state.page = "챗봇"
-
-    st.session_state.chat_history.append(
-        {
-            "role": "user",
-            "content": user_prompt,
-        }
-    )
-
+    st.session_state.chat_history.append({"role": "user", "content": user_prompt})
     st.session_state.chat_history.append(
         {
             "role": "assistant",
             "content": (
-                "현재는 목업 응답입니다. 실제 구현 시 RAG가 현재 회기 기록을 바탕으로 "
-                "유사 상담 사례, 상담 가이드라인, 상담 이론 문서를 검색하고 답변을 생성합니다.\n\n"
+                "현재는 목업 응답입니다. 실제 구현 시 RAG가 현재 상담기록을 바탕으로 "
+                "유사 상담 사례, 임상 가이드라인, 상담 이론 문서를 검색하고 답변을 생성합니다.\n\n"
                 "현재 회기에서는 수면 문제, 피로감, 출근 전 불안이 반복적으로 나타나며, "
                 "다음 회기에서는 수면 양상, 불안 유발 상황, 회피 행동, 자기비하적 사고를 우선 확인하는 것이 적절합니다."
             ),
@@ -356,19 +375,6 @@ st.markdown(
         border-right: 1px solid {BORDER};
     }}
 
-    section[data-testid="stSidebar"] h1 {{
-        color: {TEXT};
-        font-weight: 720;
-        letter-spacing: -0.035em;
-        font-size: 1.2rem;
-    }}
-
-    section[data-testid="stSidebar"] h4 {{
-        font-weight: 620;
-        font-size: 0.9rem;
-        color: {TEXT};
-    }}
-
     .app-title {{
         font-size: 1.72rem;
         font-weight: 700;
@@ -388,14 +394,6 @@ st.markdown(
 
     .chart-section-title {{
         font-size: 1.02rem;
-        font-weight: 620;
-        color: {TEXT};
-        margin-top: 0.8rem;
-        margin-bottom: 0.25rem;
-    }}
-
-    .goal-section-title {{
-        font-size: 1.0rem;
         font-weight: 620;
         color: {TEXT};
         margin-top: 0.8rem;
@@ -473,10 +471,6 @@ st.markdown(
         line-height: 1.65;
     }}
 
-    .summary-card-body div {{
-        margin-bottom: 0.22rem;
-    }}
-
     div.stButton > button:first-child {{
         border-radius: 999px;
         min-height: 2.45rem;
@@ -486,12 +480,6 @@ st.markdown(
         border: 1px solid #CBD5E1;
         color: {TEXT};
         background: #FFFFFF;
-        white-space: nowrap;
-    }}
-
-    div.stButton > button p {{
-        font-size: 0.88rem;
-        line-height: 1.2;
         white-space: nowrap;
     }}
 
@@ -508,12 +496,6 @@ st.markdown(
         box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
     }}
 
-    div.stButton > button[kind="primary"]:hover {{
-        background: {PRIMARY_DARK};
-        border-color: {PRIMARY_DARK};
-        color: white;
-    }}
-
     div.stDownloadButton > button:first-child {{
         border-radius: 999px;
         min-height: 2.35rem;
@@ -528,58 +510,6 @@ st.markdown(
         border-radius: 1rem;
         border: 1px solid {BORDER};
         box-shadow: 0px 4px 16px rgba(15, 23, 42, 0.035);
-    }}
-
-    div[data-testid="stMetric"] label {{
-        color: {SUBTEXT};
-        font-weight: 600;
-    }}
-
-    div[data-testid="stMetricValue"] {{
-        color: {TEXT};
-        font-weight: 650;
-    }}
-
-    div[data-testid="stMetricDelta"] {{
-        color: {PRIMARY_DARK} !important;
-        background: {PRIMARY_LIGHT};
-        width: fit-content;
-        padding: 0.1rem 0.45rem;
-        border-radius: 999px;
-        font-weight: 600;
-    }}
-
-    textarea {{
-        border-radius: 0.9rem !important;
-        border-color: #CBD5E1 !important;
-    }}
-
-    input, textarea, select {{
-        font-size: 0.95rem !important;
-    }}
-
-    div[data-testid="stAlert"] {{
-        border-radius: 0.85rem;
-        border: 1px solid #BFDBFE;
-        background: #EFF6FF;
-        color: {PRIMARY_DARK};
-    }}
-
-    button[data-baseweb="tab"] {{
-        color: {TEXT};
-        font-weight: 560;
-    }}
-
-    button[data-baseweb="tab"][aria-selected="true"] {{
-        color: {PRIMARY_DARK} !important;
-    }}
-
-    button[data-baseweb="tab"][aria-selected="true"] > div {{
-        color: {PRIMARY_DARK} !important;
-    }}
-
-    div[data-baseweb="tab-highlight"] {{
-        background-color: {PRIMARY} !important;
     }}
 
     .hira-card {{
@@ -604,11 +534,6 @@ st.markdown(
         margin-bottom: 0.28rem;
     }}
 
-    .hira-line strong {{
-        color: {TEXT};
-        font-weight: 600;
-    }}
-
     .hira-caption {{
         font-size: 0.72rem;
         color: #94A3B8;
@@ -629,6 +554,72 @@ st.markdown(
         margin-bottom: 0.7rem;
     }}
 
+    /* Streamlit 기본 포커스/탭 포인트 컬러를 블루 계열로 통일 */
+    div[data-baseweb="tab-list"] button[aria-selected="true"] p,
+    div[data-baseweb="tab-list"] button[aria-selected="true"] div {{
+        color: {PRIMARY} !important;
+    }}
+
+    div[data-baseweb="tab-highlight"] {{
+        background-color: {PRIMARY} !important;
+    }}
+
+    textarea:focus, input:focus, div[data-baseweb="select"]:focus-within {{
+        border-color: {PRIMARY} !important;
+        box-shadow: 0 0 0 1px {PRIMARY} !important;
+    }}
+
+    .profile-card {{
+        background: #FFFFFF;
+        border: 1px solid {BORDER};
+        border-radius: 1rem;
+        padding: 0.9rem 0.95rem;
+        margin-bottom: 0.75rem;
+    }}
+
+    .profile-row {{
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+    }}
+
+    .avatar-circle {{
+        width: 42px;
+        height: 42px;
+        border-radius: 999px;
+        background: {PRIMARY};
+        color: #FFFFFF;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.95rem;
+    }}
+
+    .profile-name {{
+        font-weight: 700;
+        color: {TEXT};
+        font-size: 0.94rem;
+        line-height: 1.3;
+    }}
+
+    .profile-sub {{
+        color: {SUBTEXT};
+        font-size: 0.75rem;
+        line-height: 1.3;
+    }}
+
+    .subscription-card {{
+        background: {PRIMARY_LIGHT};
+        border: 1px solid {PRIMARY_SOFT};
+        color: {PRIMARY_DARK};
+        border-radius: 999px;
+        padding: 0.6rem 0.85rem;
+        font-size: 0.82rem;
+        font-weight: 650;
+        text-align: center;
+    }}
+
     hr {{
         border-color: {BORDER};
     }}
@@ -645,221 +636,190 @@ with st.sidebar:
     st.title("CounsHelper")
     st.caption("상담 기록 분석 & 보고서 자동화")
 
-    st.divider()
-
-    if st.button("내담자 목록", key="nav_clients", use_container_width=True):
-        go_page("내담자 목록")
-        st.rerun()
-
-    if st.button("회기 목록", key="nav_sessions", use_container_width=True):
-        go_page("회기 목록")
-        st.rerun()
-
-    st.divider()
-
-    st.markdown("#### 현재 시연 케이스")
-    st.write(f"**내담자:** {st.session_state.selected_client}")
-    st.write(f"**회기:** {st.session_state.selected_session}")
-
-    st.divider()
-
-    if st.button("메인 화면으로 돌아가기", key="nav_main", use_container_width=True):
-        go_page("상담기록 작성")
-        st.rerun()
-
-    st.download_button(
-        "JSON 내보내기",
-        data=make_json_export(),
-        file_name="counshelper_demo.json",
-        mime="application/json",
-        key="json_export",
-        use_container_width=True,
-    )
-
-    st.caption("v0.1 MVP 목업")
-
-
-# ─────────────────────────────────────────────────────────────
-# Header
-# ─────────────────────────────────────────────────────────────
-client_row = get_client_row()
-
-if st.session_state.page == "챗봇":
-    header_col = st.columns([1])[0]
-
-    with header_col:
-        st.markdown(
-            '<div class="app-title">CounsHelper - 상담 기록 분석 & 보고서 자동화 플랫폼</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            f"""
-            <span class="tag">{st.session_state.selected_client}</span>
-            <span class="tag">{st.session_state.selected_session}</span>
-            <span class="tag">{client_row['연령대']} {client_row['성별']} · {client_row['지역']}</span>
-            <span class="tag">{client_row['상담 유형']}</span>
-            """,
-            unsafe_allow_html=True,
-        )
-else:
-    header_col, action_col1, action_col2 = st.columns([5.7, 1.2, 1.1])
-
-    with header_col:
-        st.markdown(
-            '<div class="app-title">CounsHelper - 상담 기록 분석 & 보고서 자동화 플랫폼</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            f"""
-            <span class="tag">{st.session_state.selected_client}</span>
-            <span class="tag">{st.session_state.selected_session}</span>
-            <span class="tag">{client_row['연령대']} {client_row['성별']} · {client_row['지역']}</span>
-            <span class="tag">{client_row['상담 유형']}</span>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with action_col1:
-        if st.button("AI 분석 실행", key="header_analyze", use_container_width=True):
-            go_page("분석 대시보드")
-            st.rerun()
-
-    with action_col2:
-        if st.button("💬 AI 도우미", key="header_chat", use_container_width=True):
-            go_page("챗봇")
-            st.rerun()
-
-
-# ─────────────────────────────────────────────────────────────
-# View Components
-# ─────────────────────────────────────────────────────────────
-def render_main_nav():
-    st.markdown('<div class="nav-spacer"></div>', unsafe_allow_html=True)
-
-    n1, n2, n3 = st.columns(3)
-
-    with n1:
-        if st.button(
-            "상담 기록 작성",
-            key="top_nav_write",
-            use_container_width=True,
-            type="primary" if st.session_state.page == "상담기록 작성" else "secondary",
-        ):
-            go_page("상담기록 작성")
-            st.rerun()
-
-    with n2:
-        if st.button(
-            "분석 대시보드",
-            key="top_nav_dashboard",
-            use_container_width=True,
-            type="primary" if st.session_state.page == "분석 대시보드" else "secondary",
-        ):
-            go_page("분석 대시보드")
-            st.rerun()
-
-    with n3:
-        if st.button(
-            "보고서·계획",
-            key="top_nav_report",
-            use_container_width=True,
-            type="primary" if st.session_state.page == "보고서·계획" else "secondary",
-        ):
-            go_page("보고서·계획")
-            st.rerun()
-
-    st.markdown('<div class="nav-spacer"></div>', unsafe_allow_html=True)
-
-
-def render_client_list():
-    st.markdown('<div class="section-title">내담자 목록</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="page-desc">발표용 조회 화면입니다. 실제 시연은 메인 상담기록 작성 화면에서 진행합니다.</div>',
-        unsafe_allow_html=True,
-    )
-
-    for _, row in CLIENTS.iterrows():
-        with st.container(border=True):
-            c1, c2, c3, c4 = st.columns([0.22, 0.28, 0.25, 0.25])
-
-            with c1:
-                st.markdown(f"### {row['내담자 ID']}")
-                st.caption(f"{row['성별']} · {row['연령대']} · {row['지역']}")
-
-            with c2:
-                st.markdown("**상담 유형**")
-                st.write(row["상담 유형"])
-
-            with c3:
-                st.markdown("**최근 회기**")
-                st.write(row["최근 회기"])
-
-            with c4:
-                st.markdown("**상태**")
-                st.write(row["상태"])
-
-
-def render_session_list():
-    st.markdown('<div class="section-title">전체 회기 목록</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="page-desc">전체 상담 회기를 최신 상담일 순서로 보여주는 조회용 화면입니다.</div>',
-        unsafe_allow_html=True,
-    )
-
-    df = SESSIONS.copy()
-    df["_date"] = pd.to_datetime(df["상담일"], errors="coerce")
-    df = df.sort_values("_date", ascending=False).drop(columns=["_date"]).reset_index(drop=True)
-
-    for _, row in df.iterrows():
-        with st.container(border=True):
-            c1, c2, c3, c4, c5 = st.columns([0.13, 0.18, 0.18, 0.34, 0.17])
-
-            with c1:
-                st.markdown(f"### {row['회기']}")
-
-            with c2:
-                st.write(row["상담일"])
-
-            with c3:
-                st.write(row["내담자 ID"])
-
-            with c4:
-                st.write(row["상담 주제"])
-
-            with c5:
-                st.write(row["보고서 상태"])
-
-
-def render_record_write():
-    render_main_nav()
-
-    session_row = get_session_row()
-
+    # 로그인은 완료된 상태로 표시하고, 별도 클릭 버튼은 두지 않음
     st.markdown(
         """
-        <div class="hero-card">
-            <div class="hero-title">상담 기록 작성</div>
-            <div class="hero-desc">
-                상담 내용을 입력하면 AI가 우울·불안·중독 위험도와 28개 세부 증상 요인을 분석하고,
-                이후 분석 대시보드와 요약 보고서 초안을 생성합니다.
+        <div class="profile-card">
+            <div class="profile-row">
+                <div class="avatar-circle">보</div>
+                <div>
+                    <div class="profile-name">보아즈</div>
+                    <div class="profile-sub">boaz@counshelper.ai</div>
+                </div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="section-title">회기 정보</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subscription-card">구독 상태 · MVP Demo 플랜</div>', unsafe_allow_html=True)
+
+    st.divider()
+
+    st.markdown("#### 내담자 선택")
+    client_keyword = st.text_input(
+        "내담자 검색",
+        value=st.session_state.client_search,
+        placeholder="예: C-001, 김OO, 서울",
+        key="client_search_input",
+    )
+
+    st.session_state.client_search = client_keyword
+
+    if client_keyword.strip():
+        keyword = client_keyword.strip().lower()
+        client_view = CLIENTS.copy()
+        mask = client_view.apply(lambda row: keyword in " ".join(row.astype(str)).lower(), axis=1)
+        client_view = client_view[mask]
+
+        if not client_view.empty:
+            selected_client_id = client_view.iloc[0]["내담자 ID"]
+            if selected_client_id != st.session_state.selected_client:
+                st.session_state.selected_client = selected_client_id
+                client_sessions = SESSIONS[SESSIONS["내담자 ID"] == selected_client_id]
+                if not client_sessions.empty:
+                    st.session_state.selected_session = client_sessions.iloc[-1]["회기"]
+                    st.session_state.record_mode = "existing"
+                st.rerun()
+        else:
+            st.info("검색 결과가 없습니다.")
+
+    st.divider()
+
+    st.button("설정", key="settings_disabled", use_container_width=True, disabled=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# Header
+# ─────────────────────────────────────────────────────────────
+client_row = get_client_row()
+st.markdown(
+    '<div class="app-title">CounsHelper - 상담 기록 분석 & 보고서 자동화 플랫폼</div>',
+    unsafe_allow_html=True,
+)
+# 내담자가 선택된 상태에서만 타이틀 하단 태그 표시
+if st.session_state.selected_client:
+    st.markdown(
+        f"""
+        <span class="tag">{st.session_state.selected_client}</span>
+        <span class="tag">{st.session_state.selected_session}</span>
+        <span class="tag">{client_row['연령대']} {client_row['성별']} · {client_row['지역']}</span>
+        <span class="tag">{client_row['상담 유형']}</span>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Top Navigation
+# ─────────────────────────────────────────────────────────────
+def render_main_nav():
+    st.markdown('<div class="nav-spacer"></div>', unsafe_allow_html=True)
+    n1, n2, n3, n4 = st.columns(4)
+
+    nav_items = [
+        (n1, "상담내역 기록·추가", "상담내역 기록·추가", "top_nav_records"),
+        (n2, "분석 대시보드", "분석 대시보드", "top_nav_dashboard"),
+        (n3, "AI 보고서", "AI 보고서", "top_nav_report"),
+        (n4, "챗봇", "챗봇", "top_nav_chat"),
+    ]
+
+    for col, label, page, key in nav_items:
+        with col:
+            if st.button(
+                label,
+                key=key,
+                use_container_width=True,
+                type="primary" if st.session_state.page == page else "secondary",
+            ):
+                go_page(page)
+                st.rerun()
+
+    st.markdown('<div class="nav-spacer"></div>', unsafe_allow_html=True)
+
+
+def render_session_cards():
+    st.markdown('<div class="section-title">상담 내역</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="page-desc">선택한 내담자의 기존 상담 기록을 확인하거나 새 상담 내역을 추가합니다.</div>',
+        unsafe_allow_html=True,
+    )
+
+    client_sessions = SESSIONS[SESSIONS["내담자 ID"] == st.session_state.selected_client].copy()
+    client_sessions["_date"] = pd.to_datetime(client_sessions["상담일"], errors="coerce")
+    client_sessions = client_sessions.sort_values("_date", ascending=False).drop(columns=["_date"])
+
+    if client_sessions.empty:
+        st.info("기존 상담 내역이 없습니다. 새 상담 내역을 추가해 주세요.")
+    else:
+        for _, row in client_sessions.iterrows():
+            selected = st.session_state.record_mode == "existing" and st.session_state.selected_session == row["회기"]
+            with st.container(border=True):
+                c1, c2, c3, c4, c5 = st.columns([0.14, 0.18, 0.34, 0.18, 0.16])
+                with c1:
+                    st.markdown(f"**{row['회기']}**")
+                with c2:
+                    st.write(row["상담일"])
+                with c3:
+                    st.write(row["상담 주제"])
+                with c4:
+                    st.write(row["보고서 상태"])
+                with c5:
+                    button_label = "선택됨" if selected else "기록 보기"
+                    if st.button(button_label, key=f"select_{row['내담자 ID']}_{row['회기']}", use_container_width=True, disabled=selected):
+                        select_session(row["회기"])
+                        st.rerun()
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([0.18, 0.60, 0.22])
+        with c1:
+            st.markdown("**+ 신규**")
+        with c2:
+            st.write("새 상담 내역 추가")
+            st.caption("회기 정보와 상담 내용을 입력해 새 기록을 생성합니다.")
+        with c3:
+            if st.button("추가하기", key="add_new_session", use_container_width=True):
+                start_new_session()
+                st.rerun()
+
+
+def render_existing_record_preview():
+    session_row = get_session_row()
+    st.markdown('<div class="section-title">선택한 상담 기록 요약</div>', unsafe_allow_html=True)
 
     f1, f2, f3, f4 = st.columns([0.18, 0.22, 0.22, 0.38])
-    f1.text_input("회기 번호", value=st.session_state.selected_session, key="write_session_no")
-    f2.text_input("회기 일시", value=session_row["상담일"], key="write_session_date")
-    f3.selectbox("상담 범위", ["우울/불안", "우울", "불안", "중독"], key="write_scope")
-    f4.text_input("상담 주제", value=session_row["상담 주제"], key="write_topic")
+    f1.metric("회기", session_row["회기"])
+    f2.metric("상담일", session_row["상담일"])
+    f3.metric("보고서 상태", session_row["보고서 상태"])
+    f4.metric("상담 주제", session_row["상담 주제"])
+
+    st.markdown(
+        """
+        <div class="hero-card">
+            <div class="hero-title">기존 기록이 선택되었습니다</div>
+            <div class="hero-desc">
+                상단의 분석 대시보드 또는 AI 보고서 탭을 눌러 선택한 상담 기록의 분석 결과와 보고서 초안을 확인할 수 있습니다.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_new_record_form():
+    st.markdown('<div class="section-title">새 상담 내역 추가</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="page-desc">새 회기 정보와 상담자·내담자 발화가 구분된 상담 내용을 입력합니다.</div>',
+        unsafe_allow_html=True,
+    )
+
+    f1, f2, f3, f4 = st.columns([0.18, 0.22, 0.22, 0.38])
+    f1.text_input("회기 번호", value="4회기", key="new_session_no")
+    f2.text_input("회기 일시", value=datetime.now().strftime("%Y-%m-%d"), key="new_session_date")
+    f3.selectbox("상담 범위", ["우울/불안", "우울", "불안", "중독"], key="new_scope")
+    f4.text_input("상담 주제", value="", placeholder="예: 업무 스트레스 및 불안", key="new_topic")
 
     st.markdown("")
-
-    st.markdown('<div class="section-title">상담 내용 입력</div>', unsafe_allow_html=True)
-
     input_tab1, input_tab2 = st.tabs(["전사 텍스트 붙여넣기", "발화 단위 입력"])
 
     with input_tab1:
@@ -867,13 +827,12 @@ def render_record_write():
             "상담 내용",
             value=build_dialogue_text(st.session_state.dialogue_rows),
             height=330,
-            key="write_text",
+            key="new_write_text",
             help="이미 정리된 상담 전사문이 있으면 그대로 붙여넣는 방식입니다.",
         )
 
     with input_tab2:
         st.caption("상담사/내담자를 선택하고 발화를 한 줄씩 입력하면 자동으로 상담 텍스트 형태로 합쳐집니다.")
-
         edited_rows = st.data_editor(
             st.session_state.dialogue_rows,
             num_rows="dynamic",
@@ -892,34 +851,28 @@ def render_record_write():
                     required=True,
                 ),
             },
-            key="dialogue_editor",
+            key="new_dialogue_editor",
             height=300,
         )
-
         st.session_state.dialogue_rows = edited_rows
 
-        with st.expander("자동 생성된 상담 텍스트 미리보기"):
-            st.text_area(
-                "미리보기",
-                value=build_dialogue_text(edited_rows),
-                height=180,
-                key="dialogue_preview",
-            )
+    st.info("현재는 목업 화면입니다. 실제 저장 및 분석 실행은 모델 연동 후 활성화할 예정입니다.")
+    st.button("상담 내역 저장 및 AI 분석 실행", key="new_save_analyze_disabled", use_container_width=True, disabled=True)
 
-    st.caption("※ 데모 목업에서는 비식별 상담 텍스트를 사용합니다.")
 
-    run1, run2, run3 = st.columns([1.1, 1.0, 2.6])
+# ─────────────────────────────────────────────────────────────
+# Views
+# ─────────────────────────────────────────────────────────────
+def render_record_page():
+    render_main_nav()
+    render_session_cards()
 
-    with run1:
-        if st.button("AI 분석 실행", key="write_analyze", use_container_width=True, type="primary"):
-            go_page("분석 대시보드")
-            st.rerun()
+    st.divider()
 
-    with run2:
-        st.button("임시 저장", key="write_save", use_container_width=True)
-
-    with run3:
-        st.info("분석 완료 후 대시보드와 보고서 화면에서 결과를 확인할 수 있습니다.")
+    if st.session_state.record_mode == "new":
+        render_new_record_form()
+    else:
+        render_existing_record_preview()
 
 
 def render_dashboard():
@@ -927,9 +880,12 @@ def render_dashboard():
 
     st.markdown('<div class="section-title">분석 대시보드</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-desc">우울·불안·중독 위험도, 28개 세부 증상 요인, 회기별 변화 추이, 인구통계 맥락을 한 화면에서 확인합니다.</div>',
+        '<div class="page-desc">선택한 상담 기록의 우울·불안·중독 위험도, 세부 증상 요인, 회기별 변화 추이, 인구통계 맥락을 확인합니다.</div>',
         unsafe_allow_html=True,
     )
+
+    if st.session_state.record_mode == "new":
+        st.info("현재는 새 상담 내역 입력 화면의 예시 분석 결과입니다. 실제 분석 값은 모델 연동 후 입력된 상담 내용을 기반으로 생성됩니다.")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("우울 위험도", "2.0 / 3", "주의")
@@ -939,87 +895,62 @@ def render_dashboard():
 
     st.markdown("")
 
-    summary_col, hira_col = st.columns([0.72, 0.28], gap="large")
+    summary_col, hira_col = st.columns([0.68, 0.32], gap="large")
 
     with summary_col:
         st.markdown("#### AI 분석 요약")
-
-        s1, s2, s3, s4 = st.columns(4)
-
-        with s1:
-            st.markdown(
-                """
-                <div class="summary-card">
-                    <div class="summary-card-title">주요 증상</div>
-                    <div class="summary-card-body">
-                        <div>수면 문제</div>
-                        <div>피로감</div>
-                        <div>출근 전 불안</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        with s2:
-            st.markdown(
-                """
-                <div class="summary-card">
-                    <div class="summary-card-title">위험 요인</div>
-                    <div class="summary-card-body">
-                        <div>업무량 증가</div>
-                        <div>수면 부족</div>
-                        <div>직무 스트레스</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        with s3:
-            st.markdown(
-                """
-                <div class="summary-card">
-                    <div class="summary-card-title">개선 요인</div>
-                    <div class="summary-card-body">
-                        <div>상담 참여 의지</div>
-                        <div>수면 일지 작성 동의</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        with s4:
-            st.markdown(
-                """
-                <div class="summary-card">
-                    <div class="summary-card-title">개입 요인</div>
-                    <div class="summary-card-body">
-                        <div>감정 명명</div>
-                        <div>자동사고 탐색</div>
-                        <div>수면 패턴 확인</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+        cards = [
+            ("주요 증상", ["수면 문제", "피로감", "출근 전 불안"]),
+            ("위험 요인", ["업무량 증가", "수면 부족", "직무 스트레스"]),
+            ("개선 요인", ["상담 참여 의지", "수면 일지 작성 동의"]),
+            ("개입 요인", ["감정 명명", "자동사고 탐색", "수면 패턴 확인"]),
+        ]
+        for row_start in range(0, len(cards), 2):
+            row_cols = st.columns(2)
+            for col, (title, items) in zip(row_cols, cards[row_start:row_start + 2]):
+                with col:
+                    body = "".join([f"<div>{item}</div>" for item in items])
+                    st.markdown(
+                        f"""
+                        <div class="summary-card">
+                            <div class="summary-card-title">{title}</div>
+                            <div class="summary-card-body">{body}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+            st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
 
     with hira_col:
-        st.markdown(
-            """
-            <div class="hira-card">
-                <div class="hira-title">HIRA 인구통계 비교</div>
-                <div class="hira-line"><strong>비교군</strong> 30대 여성 · 서울</div>
-                <div class="hira-line"><strong>진료 맥락</strong> 동일 인구집단 대비 높은 편</div>
-                <div class="hira-line"><strong>활용 목적</strong> 상담사가 참고하는 공공 통계 맥락</div>
-                <div class="hira-caption">
-                    공공 통계 기반 참고 정보이며, 개인 진단 근거로 사용하지 않습니다.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        st.markdown("#### HIRA 인구통계 비교")
+        hira_chart_data = pd.DataFrame(
+            {
+                "구분": ["내담자", "서울 30대 여성", "전국 30대 여성"],
+                "비율": [67, 8.3, 6.1],
+            }
         )
+        fig_hira = px.bar(
+            hira_chart_data,
+            x="구분",
+            y="비율",
+            text="비율",
+            color="구분",
+            color_discrete_sequence=["#2563EB", "#60A5FA", "#CBD5E1"],
+        )
+        fig_hira.update_traces(texttemplate="%{text}%", textposition="outside", width=0.46)
+        fig_hira.update_layout(
+            height=315,
+            margin=dict(l=10, r=10, t=10, b=10),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            showlegend=False,
+            yaxis_title="비율(%)",
+            xaxis_title="",
+            font=dict(color="#0F172A", size=11),
+        )
+        fig_hira.update_xaxes(tickangle=0, tickfont=dict(size=10))
+        st.plotly_chart(fig_hira, use_container_width=True)
+        st.caption("예시 데이터입니다. 실제 HIRA 통계 연동 후 비교 지표로 대체됩니다.")
 
     st.markdown("")
 
@@ -1039,9 +970,22 @@ def render_dashboard():
     }
 
     st.markdown('<div class="chart-section-title">상위 세부 증상 요인 Top 10</div>', unsafe_allow_html=True)
+    selected_categories = st.multiselect(
+        "카테고리 필터",
+        ["우울", "불안", "중독"],
+        default=["우울", "불안", "중독"],
+    )
 
-    top_scores = SYMPTOM_SCORES.sort_values("점수", ascending=False).head(10)
+    if selected_categories:
+        factor_source = SYMPTOM_SCORES[
+            SYMPTOM_SCORES["카테고리"].apply(
+                lambda value: any(category in str(value) for category in selected_categories)
+            )
+        ].copy()
+    else:
+        factor_source = SYMPTOM_SCORES.iloc[0:0].copy()
 
+    top_scores = factor_source.sort_values("점수", ascending=False).head(10)
     fig_bar = px.bar(
         top_scores.sort_values("점수"),
         x="점수",
@@ -1051,6 +995,7 @@ def render_dashboard():
         orientation="h",
         range_x=[0, 3],
     )
+    fig_bar.update_traces(width=0.42)
     fig_bar.update_layout(
         height=420,
         margin=dict(l=10, r=10, t=15, b=10),
@@ -1061,32 +1006,8 @@ def render_dashboard():
     )
     st.plotly_chart(fig_bar, use_container_width=True)
 
-    with st.expander("28개 세부 증상 요인 자세히 보기"):
-        fig_all = px.bar(
-            SYMPTOM_SCORES.sort_values("점수"),
-            x="점수",
-            y="요인",
-            color="카테고리",
-            color_discrete_map=color_map,
-            orientation="h",
-            range_x=[0, 3],
-        )
-        fig_all.update_layout(
-            height=620,
-            plot_bgcolor="white",
-            paper_bgcolor="white",
-            font=dict(color="#0F172A"),
-            margin=dict(l=10, r=10, t=15, b=10),
-            legend_title_text="카테고리",
-        )
-        st.plotly_chart(fig_all, use_container_width=True)
-
-    st.markdown("")
-
     st.markdown('<div class="chart-section-title">회기별 변화 추이</div>', unsafe_allow_html=True)
-
     trend_long = TREND.melt(id_vars="회기", var_name="요인", value_name="점수")
-
     fig_line = px.line(
         trend_long,
         x="회기",
@@ -1106,74 +1027,45 @@ def render_dashboard():
     )
     st.plotly_chart(fig_line, use_container_width=True)
 
-    st.markdown("")
-
-    history_col, goal_col = st.columns([0.56, 0.44], gap="large")
-
-    with history_col:
-        st.markdown('<div class="chart-section-title">회기 기록 요약</div>', unsafe_allow_html=True)
-        client_sessions = SESSIONS[SESSIONS["내담자 ID"] == st.session_state.selected_client]
-        st.dataframe(client_sessions, use_container_width=True, hide_index=True)
-
-    with goal_col:
-        st.markdown('<div class="goal-section-title">장기 상담 목표 진행률</div>', unsafe_allow_html=True)
-
-        fig_goal = px.bar(
-            GOAL_PROGRESS,
-            x="진행률",
-            y="상담 목표",
-            orientation="h",
-            range_x=[0, 100],
-            text="진행률",
-            color_discrete_sequence=["#2563EB"],
-        )
-        fig_goal.update_traces(
-            texttemplate="%{text}%",
-            textposition="outside",
-            width=0.32,
-        )
-        fig_goal.update_layout(
-            height=260,
-            margin=dict(l=10, r=35, t=10, b=10),
-            plot_bgcolor="white",
-            paper_bgcolor="white",
-            font=dict(color="#0F172A", size=11),
-            xaxis_title="진행률",
-            yaxis_title="",
-            bargap=0.55,
-        )
-        st.plotly_chart(fig_goal, use_container_width=True)
 
 
-def render_report_plan():
+def render_report():
     render_main_nav()
 
-    st.markdown('<div class="section-title">보고서·계획</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">AI 보고서</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-desc">AI가 생성한 4개 섹션 요약 보고서 초안을 상담사가 검토·수정합니다.</div>',
+        '<div class="page-desc">AI가 생성한 요약본과 보고서 형식의 텍스트 초안을 상담사가 검토·수정합니다.</div>',
         unsafe_allow_html=True,
     )
 
-    st.markdown("#### 요약 보고서 초안")
+    if st.session_state.record_mode == "new":
+        st.info("현재는 새 상담 내역 입력 화면의 예시 보고서입니다. 실제 보고서는 모델 연동 후 입력된 상담 내용을 기반으로 생성됩니다.")
 
-    edited_report = st.text_area(
-        "보고서 초안",
-        value=build_report_text(),
-        height=540,
-        key="report_text",
-    )
+    summary_text = """[요약본]
+내담자는 최근 업무량 증가 이후 수면 문제, 피로감, 출근 전 불안을 반복적으로 호소하였다. 상담 중 자기비하적 사고와 사회적 회피 경향이 관찰되었으며, 현재는 우울·불안 관련 요인을 중심으로 지속적인 모니터링이 필요한 상태로 보인다. 다만 상담 참여 의지가 있고 자신의 상태를 비교적 구체적으로 표현할 수 있어, 다음 회기에서는 수면 패턴 확인과 자동사고 탐색을 중심으로 개입할 수 있다.
+"""
+
+    report_style_text = build_report_text()
+
+    st.markdown("#### 요약본")
+    edited_summary = st.text_area("요약본", value=summary_text, height=180, key="summary_text")
+
+    st.markdown("#### 보고서 형식 텍스트")
+    edited_report = st.text_area("보고서 형식 텍스트", value=report_style_text, height=430, key="report_text")
+
+    final_report = edited_summary + chr(10) + chr(10) + edited_report
 
     d1, d2, d3 = st.columns(3)
     d1.download_button(
         ".md 다운로드",
-        edited_report,
+        final_report,
         "counshelper_report.md",
         mime="text/markdown",
         key="report_md_download",
         use_container_width=True,
     )
-    d2.button(".pdf 다운로드", key="report_pdf_download", use_container_width=True)
-    d3.button(".docx 다운로드", key="report_docx_download", use_container_width=True)
+    d2.button(".pdf 다운로드", key="report_pdf_download_disabled", use_container_width=True, disabled=True)
+    d3.button(".docx 다운로드", key="report_docx_download_disabled", use_container_width=True, disabled=True)
 
     st.caption("※ 본 보고서는 AI 생성 초안이며, 상담사의 검토와 수정 후 사용하는 것을 전제로 합니다.")
 
@@ -1181,16 +1073,13 @@ def render_report_plan():
 def render_chat_messages():
     if not st.session_state.chat_history:
         with st.chat_message("assistant", avatar="💬"):
-            st.write(
-                "안녕하세요. 현재 내담자의 상담 기록을 바탕으로 유사 사례, 임상 가이드, 다음 회기 계획을 도와드릴 수 있습니다."
-            )
+            st.write("안녕하세요. 현재 내담자의 상담 기록을 바탕으로 유사 사례, 임상 가이드, 다음 회기 계획을 도와드릴 수 있습니다.")
         return
 
     for msg in st.session_state.chat_history:
         if msg["role"] == "assistant":
             with st.chat_message("assistant", avatar="💬"):
                 st.write(msg["content"])
-
                 if msg.get("sources"):
                     with st.expander("참고 출처 보기"):
                         for source in msg["sources"]:
@@ -1222,36 +1111,29 @@ def render_quick_question_buttons():
 
     for row_start in range(0, len(questions), 4):
         cols = st.columns(4)
-
         for col, (label, prompt, key) in zip(cols, questions[row_start:row_start + 4]):
             with col:
                 if st.button(label, key=key, use_container_width=True):
                     add_mock_answer(prompt)
-                    st.session_state.page = "챗봇"
                     st.rerun()
 
 
 def render_chatbot():
-    top_col1, top_col2, top_col3 = st.columns([0.66, 0.14, 0.20])
+    render_main_nav()
 
+    top_col1, top_col2 = st.columns([0.78, 0.22])
     with top_col1:
-        st.markdown('<div class="section-title">AI 도우미 챗봇</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">챗봇</div>', unsafe_allow_html=True)
         st.caption(f"현재 컨텍스트: {st.session_state.selected_client} · {st.session_state.selected_session}")
-
     with top_col2:
         st.button("대화 초기화", key="chat_clear", on_click=clear_chat, use_container_width=True)
-
-    with top_col3:
-        if st.button("메인으로 돌아가기", key="chat_back", use_container_width=True):
-            go_page("상담기록 작성")
-            st.rerun()
 
     st.markdown(
         """
         <div class="hero-card">
             <div class="hero-title">RAG 기반 AI 도우미</div>
             <div class="hero-desc">
-                유사 상담 케이스, 임상 가이드라인, 상담 이론 문서를 검색해 현재 회기 맥락에 맞는 답변을 제공합니다.
+                현재 상담기록을 바탕으로 유사 상담 케이스, 임상 가이드라인, 상담 이론 문서를 검색해 답변을 제공합니다.
             </div>
         </div>
         """,
@@ -1259,36 +1141,23 @@ def render_chatbot():
     )
 
     render_chat_messages()
-
     st.markdown("")
-
     render_quick_question_buttons()
 
     prompt = st.chat_input("AI 도우미에게 질문하세요. 예: 이 내담자의 다음 회기 질문을 추천해줘")
-
     if prompt:
         add_mock_answer(prompt)
-        st.session_state.page = "챗봇"
         st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────
 # Router
 # ─────────────────────────────────────────────────────────────
-if st.session_state.page == "상담기록 작성":
-    render_record_write()
-
+if st.session_state.page == "상담내역 기록·추가":
+    render_record_page()
 elif st.session_state.page == "분석 대시보드":
     render_dashboard()
-
-elif st.session_state.page == "보고서·계획":
-    render_report_plan()
-
-elif st.session_state.page == "내담자 목록":
-    render_client_list()
-
-elif st.session_state.page == "회기 목록":
-    render_session_list()
-
+elif st.session_state.page == "AI 보고서":
+    render_report()
 elif st.session_state.page == "챗봇":
     render_chatbot()
