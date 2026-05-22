@@ -39,9 +39,10 @@ DEMO_MODE = str(get_secret("DEMO_MODE", "true")).lower() == "true"
 # 나중에 3단계 KlueBERT 모델 코드, 4단계 Koalpaca 모델 코드를 추가한 뒤
 # MODEL_BACKEND 값을 aihub_local 등으로 바꾸면 됨.
 MODEL_BACKEND = get_secret("MODEL_BACKEND", "mock")
+FACTOR_BACKEND = get_secret("FACTOR_BACKEND", "mock")
 
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY", "")
-GEMINI_MODEL = get_secret("GEMINI_MODEL", "gemini-2.5-flash"))
+GEMINI_MODEL = get_secret("GEMINI_MODEL", "gemini-2.5-flash")
 
 CHROMA_DB_PATH = get_secret("CHROMA_DB_PATH", "./chroma_db")
 RAG_EMBEDDING_MODEL = get_secret("RAG_EMBEDDING_MODEL", "BAAI/bge-m3")
@@ -231,6 +232,52 @@ class MockFactorExtractor:
 
         return factors
 
+class GeminiAPIFactorExtractor:
+    """
+    Gemini API 기반 28요인 추출 연결 클래스.
+
+    현재 역할:
+        - src/factor_extractor.py의 extract_factors() 함수를 호출한다.
+        - GEMINI_API_KEY가 없거나 API 호출에 실패해도 앱이 깨지지 않게 한다.
+        - 최종 반환값은 기존 MockFactorExtractor와 동일하게 factors dict만 반환한다.
+    """
+
+    def __init__(self):
+        self.last_result = {
+            "ok": False,
+            "status": "not_run",
+            "message": "Gemini 28요인 추출이 아직 실행되지 않았습니다.",
+            "backend": "gemini_api",
+        }
+
+    def extract(self, script: str, classification: Dict[str, int]) -> Dict[str, int]:
+        try:
+            from src.factor_extractor import extract_factors
+
+            result = extract_factors(
+                script=script,
+                classification=classification,
+                backend="gemini_api",
+            )
+
+            self.last_result = result
+
+            return result.get("factors", {})
+
+        except Exception as error:
+            self.last_result = {
+                "ok": False,
+                "status": "error",
+                "message": f"Gemini 28요인 추출 모듈 실행 중 오류가 발생했습니다: {error}",
+                "backend": "gemini_api",
+            }
+
+            try:
+                from src.factor_extractor import FACTOR_KEYS
+
+                return {key: 0 for key in FACTOR_KEYS}
+            except Exception:
+                return {}
 
 class MockKoalpacaSummarizer:
     """
@@ -348,16 +395,19 @@ def load_factor_model():
     """
     28요인 추출 모델 로더.
 
-    현재:
-        MockFactorExtractor 사용
+    FACTOR_BACKEND 값에 따라 28요인 추출 백엔드를 선택한다.
 
-    추후:
-        Gemini few-shot 또는 별도 28요인 모델 연결
+    - mock: 기존 mock 28요인 추출 사용
+    - gemini_api: src/factor_extractor.py를 통해 Gemini API 호출
     """
-    if MODEL_BACKEND == "mock":
+    if FACTOR_BACKEND == "mock":
         return MockFactorExtractor()
 
-    if MODEL_BACKEND == "aihub_local":
+    if FACTOR_BACKEND == "gemini_api":
+        return GeminiAPIFactorExtractor()
+
+    if FACTOR_BACKEND == "aihub_local":
+        # 향후 AI Hub 기반 28요인 모델을 직접 연결할 때 사용할 자리
         return MockFactorExtractor()
 
     return MockFactorExtractor()
@@ -446,10 +496,14 @@ def run_analysis(script: str) -> Dict[str, Any]:
         "factors": factors,
         "summary": summary,
         "model_info": {
-    "backend": MODEL_BACKEND,
-    "classifier": KLUEBERT_MODEL_NAME if MODEL_BACKEND != "mock" else "MockKlueBERTClassifier",
-    "summarizer": "KoAlpaca API" if MODEL_BACKEND == "koalpaca_api" else "MockKoalpacaSummarizer",
-},
+            "backend": MODEL_BACKEND,
+            "factor_backend": FACTOR_BACKEND,
+            "classifier": KLUEBERT_MODEL_NAME if MODEL_BACKEND != "mock" else "MockKlueBERTClassifier",
+            "factor_extractor": "Gemini API" if FACTOR_BACKEND == "gemini_api" else "MockFactorExtractor",
+            "summarizer": "KoAlpaca API" if MODEL_BACKEND == "koalpaca_api" else "MockKoalpacaSummarizer",
+            "factor_status": getattr(factor_model, "last_result", {}).get("status", "success" if FACTOR_BACKEND == "mock" else "unknown"),
+            "factor_message": getattr(factor_model, "last_result", {}).get("message", ""),
+        },
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -1051,6 +1105,29 @@ def render_dashboard():
     if result is None:
         st.info("아직 분석 결과가 없습니다. 먼저 상담내역 기록·추가 화면에서 AI 분석을 실행하세요.")
         return
+
+        backend = result.get("model_info", {}).get("backend", "unknown")
+
+    if backend == "mock":
+        st.warning("현재 결과는 mock 분석 결과입니다. 실제 KlueBERT, KoAlpaca, RAG 모델 결과가 아닙니다.")
+    elif backend == "koalpaca_api":
+        st.info("현재 보고서 생성 백엔드는 KoAlpaca API로 설정되어 있습니다.")
+    else:
+        st.info(f"현재 모델 백엔드: {backend}")
+
+    factor_backend = result.get("model_info", {}).get("factor_backend", "mock")
+    factor_status = result.get("model_info", {}).get("factor_status", "")
+    factor_message = result.get("model_info", {}).get("factor_message", "")
+
+    if factor_backend == "mock":
+        st.warning("현재 28요인 점수는 mock 추출 결과입니다. 실제 Gemini API 결과가 아닙니다.")
+    elif factor_backend == "gemini_api":
+        if factor_status == "success":
+            st.success("28요인 추출 백엔드: Gemini API 연결 성공")
+        else:
+            st.info(f"28요인 추출 백엔드: Gemini API / 상태: {factor_status}")
+            if factor_message:
+                st.caption(factor_message)
 
     classification = result["classification"]
     factors = result["factors"]
