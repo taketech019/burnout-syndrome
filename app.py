@@ -40,6 +40,7 @@ DEMO_MODE = str(get_secret("DEMO_MODE", "true")).lower() == "true"
 # MODEL_BACKEND 값을 aihub_local 등으로 바꾸면 됨.
 MODEL_BACKEND = get_secret("MODEL_BACKEND", "mock")
 FACTOR_BACKEND = get_secret("FACTOR_BACKEND", "mock")
+CLASSIFIER_BACKEND = get_secret("CLASSIFIER_BACKEND", "mock")
 
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY", "")
 GEMINI_MODEL = get_secret("GEMINI_MODEL", "gemini-2.5-flash")
@@ -188,7 +189,58 @@ class MockKlueBERTClassifier:
             "anxiety": int(any(term in text for term in anxiety_terms)),
             "addiction": int(any(term in text for term in addiction_terms)),
         }
+        
+class KlueBertHFClassifier:
+    """
+    Hugging Face에 업로드된 KlueBERT 회귀 모델 3개를 사용해
+    우울/불안/중독 여부를 판별하는 클래스.
 
+    최종 반환값은 기존 MockKlueBERTClassifier와 동일하게
+    {
+        "depression": 0/1,
+        "anxiety": 0/1,
+        "addiction": 0/1
+    }
+    형식으로 맞춘다.
+    """
+
+    def __init__(self):
+        self.last_result = {
+            "ok": False,
+            "status": "not_run",
+            "message": "KlueBERT 분류가 아직 실행되지 않았습니다.",
+            "backend": "kluebert_hf",
+        }
+
+    def predict(self, script: str) -> Dict[str, int]:
+        try:
+            from src.classifier import classify_text
+
+            result = classify_text(script)
+            self.last_result = result
+
+            return result.get(
+                "classification",
+                {
+                    "depression": 0,
+                    "anxiety": 0,
+                    "addiction": 0,
+                },
+            )
+
+        except Exception as error:
+            self.last_result = {
+                "ok": False,
+                "status": "error",
+                "message": f"KlueBERT 분류 모듈 실행 중 오류가 발생했습니다: {error}",
+                "backend": "kluebert_hf",
+            }
+
+            return {
+                "depression": 0,
+                "anxiety": 0,
+                "addiction": 0,
+            }
 
 class MockFactorExtractor:
     """
@@ -371,21 +423,21 @@ KoAlpaca API 호출 모듈을 실행하는 중 오류가 발생했습니다.
 # =========================================================
 def load_classifier_model():
     """
-    분류 모델 로더.
+    우울/불안/중독 분류 모델 로더.
 
-    현재:
-        MockKlueBERTClassifier 사용
+    CLASSIFIER_BACKEND 값에 따라 분류 백엔드를 선택한다.
 
-    3단계에서 교체 예정:
-        AI Hub KlueBERT 실제 모델 코드
+    - mock: 기존 키워드 기반 mock 분류
+    - kluebert_hf: Hugging Face에 업로드된 KlueBERT 회귀 모델 3개 사용
     """
-    if MODEL_BACKEND == "mock":
+    if CLASSIFIER_BACKEND == "mock":
         return MockKlueBERTClassifier()
 
-    if MODEL_BACKEND == "aihub_local":
-        # 3단계에서 실제 KlueBERT 모델 클래스를 연결할 자리
-        # 예:
-        # return AIHubKlueBERTClassifier(model_path=KLUEBERT_MODEL_NAME)
+    if CLASSIFIER_BACKEND == "kluebert_hf":
+        return KlueBertHFClassifier()
+
+    if CLASSIFIER_BACKEND == "aihub_local":
+        # 향후 로컬 모델 직접 로딩 방식이 필요할 경우 사용할 자리
         return MockKlueBERTClassifier()
 
     return MockKlueBERTClassifier()
@@ -498,11 +550,17 @@ def run_analysis(script: str) -> Dict[str, Any]:
         "model_info": {
             "backend": MODEL_BACKEND,
             "factor_backend": FACTOR_BACKEND,
+            "classifier_backend": CLASSIFIER_BACKEND,
+            "classifier": "KlueBERT HF" if CLASSIFIER_BACKEND == "kluebert_hf" else "MockKlueBERTClassifier",
+            "classifier_status": getattr(classifier, "last_result", {}).get("status", "success" if CLASSIFIER_BACKEND == "mock" else "unknown"),
+            "classifier_message": getattr(classifier, "last_result", {}).get("message", ""),
+            "classifier_scores": getattr(classifier, "last_result", {}).get("scores", {}),
+            "classifier_raw_scores": getattr(classifier, "last_result", {}).get("raw_scores", {}),
             "classifier": KLUEBERT_MODEL_NAME if MODEL_BACKEND != "mock" else "MockKlueBERTClassifier",
             "factor_extractor": "Gemini API" if FACTOR_BACKEND == "gemini_api" else "MockFactorExtractor",
             "summarizer": "KoAlpaca API" if MODEL_BACKEND == "koalpaca_api" else "MockKoalpacaSummarizer",
             "factor_status": getattr(factor_model, "last_result", {}).get("status", "success" if FACTOR_BACKEND == "mock" else "unknown"),
-            "factor_message": getattr(factor_model, "last_result", {}).get("message", ""),
+            "factor_message": getattr(factor_model, "last_result", {}).get("message", ""),  
         },
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -1107,6 +1165,23 @@ def render_dashboard():
         return
 
         backend = result.get("model_info", {}).get("backend", "unknown")
+
+    classifier_backend = result.get("model_info", {}).get("classifier_backend", "mock")
+    classifier_status = result.get("model_info", {}).get("classifier_status", "")
+    classifier_message = result.get("model_info", {}).get("classifier_message", "")
+    classifier_scores = result.get("model_info", {}).get("classifier_scores", {})
+    
+    if classifier_backend == "mock":
+        st.warning("현재 우울/불안/중독 판별은 mock 분류 결과입니다. 실제 KlueBERT 모델 결과가 아닙니다.")
+    elif classifier_backend == "kluebert_hf":
+        if classifier_status == "success":
+            st.success("우울/불안/중독 판별 백엔드: KlueBERT HF 연결 성공")
+            if classifier_scores:
+                st.caption(f"KlueBERT 0~3 예측 점수: {classifier_scores}")
+        else:
+            st.info(f"우울/불안/중독 판별 백엔드: KlueBERT HF / 상태: {classifier_status}")
+            if classifier_message:
+                st.caption(classifier_message)
 
     if backend == "mock":
         st.warning("현재 결과는 mock 분석 결과입니다. 실제 KlueBERT, KoAlpaca, RAG 모델 결과가 아닙니다.")
