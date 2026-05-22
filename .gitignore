@@ -30,3 +30,9 @@ ai-model/offload/
 ai-model/koalpaca_merged/
 ai-model/*.log
 ai-model/*.err
+
+# Streamlit·터널링 산출물
+.streamlit/secrets.toml
+cloudflared
+cloudflared.log
+streamlit.log
