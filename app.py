@@ -1004,7 +1004,16 @@ def render_dashboard():
         '<div class="page-desc">AI 모델 출력 결과를 기반으로 상담 내용의 주요 라벨과 요인을 시각화합니다.</div>',
         unsafe_allow_html=True,
     )
-
+    
+    backend = result.get("model_info", {}).get("backend", "unknown")
+    
+    if backend == "mock":
+        st.warning("현재 결과는 mock 분석 결과입니다. 실제 KlueBERT, KoAlpaca, RAG 모델 결과가 아닙니다.")
+    elif backend == "koalpaca_api":
+        st.info("현재 보고서 생성 백엔드는 KoAlpaca API로 설정되어 있습니다.")
+    else:
+        st.info(f"현재 모델 백엔드: {backend}")
+    
     result = st.session_state.analysis_result
 
     if result is None:
@@ -1086,7 +1095,17 @@ def render_report():
         '<div class="page-desc">Koalpaca 요약 모델이 들어갈 위치입니다. 현재는 mock 요약 결과를 표시합니다.</div>',
         unsafe_allow_html=True,
     )
-
+    
+    backend = result.get("model_info", {}).get("backend", "unknown")
+    summarizer_name = result.get("model_info", {}).get("summarizer", "unknown")
+    
+    if backend == "mock":
+        st.warning("현재 보고서는 mock 요약 결과입니다. 실제 KoAlpaca API 결과가 아닙니다.")
+    elif backend == "koalpaca_api":
+        st.info(f"보고서 생성 백엔드: {summarizer_name}")
+    else:
+        st.info(f"보고서 생성 백엔드: {summarizer_name}")
+        
     result = st.session_state.analysis_result
 
     if result is None:
@@ -1151,11 +1170,13 @@ def render_quick_question_buttons():
 
 def render_chatbot():
     st.markdown('<div class="section-title">RAG 상담 보조 챗봇</div>', unsafe_allow_html=True)
+    
     st.markdown(
         '<div class="page-desc">ChromaDB 기반 유사 상담 사례 검색과 임상 reference 검색이 들어갈 위치입니다.</div>',
         unsafe_allow_html=True,
     )
-
+    st.warning("현재 RAG 챗봇은 mock 응답입니다. 아직 ChromaDB 검색과 실제 LLM 답변 생성이 연결되지 않았습니다.")
+    
     c1, c2 = st.columns([0.22, 0.78])
 
     with c1:
