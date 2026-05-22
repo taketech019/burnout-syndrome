@@ -41,7 +41,7 @@ DEMO_MODE = str(get_secret("DEMO_MODE", "true")).lower() == "true"
 MODEL_BACKEND = get_secret("MODEL_BACKEND", "mock")
 
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY", "")
-GEMINI_MODEL = get_secret("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = get_secret("GEMINI_MODEL", "gemini-2.5-flash"))
 
 CHROMA_DB_PATH = get_secret("CHROMA_DB_PATH", "./chroma_db")
 RAG_EMBEDDING_MODEL = get_secret("RAG_EMBEDDING_MODEL", "BAAI/bge-m3")
@@ -275,7 +275,49 @@ class MockKoalpacaSummarizer:
 5. 다음 회기 계획
 다음 회기에서는 수면 양상, 출근 전 불안 상황, 회피 행동, 자기비하적 사고, 현재 대처 방식을 구체적으로 확인한다.
 """
+        
+class KoalpacaAPISummarizer:
+    """
+    KoAlpaca API 요약 모델 연결 클래스.
 
+    현재 역할:
+        - src/summarizer.py의 summarize() 함수를 호출한다.
+        - API가 아직 설정되지 않았거나 실패하면 앱이 깨지지 않도록 안내 문구를 반환한다.
+    """
+
+    def summarize(
+        self,
+        script: str,
+        classification: Dict[str, int],
+        factors: Dict[str, int],
+    ) -> str:
+        try:
+            from src.summarizer import summarize as koalpaca_summarize
+
+            result = koalpaca_summarize(script)
+
+            if result.get("ok"):
+                return result.get("text", "").strip()
+
+            status = result.get("status", "unknown")
+            message = result.get("message", "KoAlpaca API 호출 결과를 확인할 수 없습니다.")
+
+            return f"""[KoAlpaca API 연결 상태: {status}]
+
+{message}
+
+현재 보고서 생성 기능은 KoAlpaca API 연결 자리만 준비된 상태입니다.
+KoAlpaca 호스팅이 완료되면 Streamlit Secrets에 KOALPACA_ENDPOINT_URL과 KOALPACA_API_KEY를 입력한 뒤 다시 실행하세요.
+"""
+
+        except Exception as error:
+            return f"""[KoAlpaca API 연결 오류]
+
+KoAlpaca API 호출 모듈을 실행하는 중 오류가 발생했습니다.
+
+오류 내용:
+{error}
+"""
 
 # =========================================================
 # 5. 모델 로더
@@ -325,23 +367,22 @@ def load_summarizer_model():
     """
     요약보고서 생성 모델 로더.
 
-    현재:
-        MockKoalpacaSummarizer 사용
+    MODEL_BACKEND 값에 따라 요약 백엔드를 선택한다.
 
-    4단계에서 교체 예정:
-        Koalpaca 4bit 요약 모델 코드
+    - mock: 기존 mock 요약 사용
+    - koalpaca_api: src/summarizer.py를 통해 KoAlpaca API 호출
     """
     if MODEL_BACKEND == "mock":
         return MockKoalpacaSummarizer()
 
+    if MODEL_BACKEND == "koalpaca_api":
+        return KoalpacaAPISummarizer()
+
     if MODEL_BACKEND == "aihub_local":
-        # 4단계에서 실제 Koalpaca 모델 클래스를 연결할 자리
-        # 예:
-        # return AIHubKoalpacaSummarizer(model_path=KOALPACA_MODEL_NAME)
+        # 향후 로컬 KoAlpaca 또는 AI Hub 모델을 직접 로딩할 때 사용할 자리
         return MockKoalpacaSummarizer()
 
     return MockKoalpacaSummarizer()
-
 
 # =========================================================
 # 6. 분석 파이프라인
@@ -405,10 +446,10 @@ def run_analysis(script: str) -> Dict[str, Any]:
         "factors": factors,
         "summary": summary,
         "model_info": {
-            "backend": MODEL_BACKEND,
-            "classifier": KLUEBERT_MODEL_NAME if MODEL_BACKEND != "mock" else "MockKlueBERTClassifier",
-            "summarizer": KOALPACA_MODEL_NAME if MODEL_BACKEND != "mock" else "MockKoalpacaSummarizer",
-        },
+    "backend": MODEL_BACKEND,
+    "classifier": KLUEBERT_MODEL_NAME if MODEL_BACKEND != "mock" else "MockKlueBERTClassifier",
+    "summarizer": "KoAlpaca API" if MODEL_BACKEND == "koalpaca_api" else "MockKoalpacaSummarizer",
+},
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
