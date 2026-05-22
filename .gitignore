@@ -23,3 +23,10 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+# KoAlpaca 호스팅 산출물·런타임 파일 (호스팅 머신에서만 생성)
+ai-model/models/
+ai-model/offload/
+ai-model/koalpaca_merged/
+ai-model/*.log
+ai-model/*.err
