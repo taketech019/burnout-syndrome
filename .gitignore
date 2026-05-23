@@ -28,8 +28,13 @@ venv/
 ai-model/models/
 ai-model/offload/
 ai-model/koalpaca_merged/
+ai-model/.venv-nf4/
 ai-model/*.log
 ai-model/*.err
+ai-model/*.out
+ai-model/v2_*.txt
+# 라벨링 원천 데이터 (Git 커밋 금지, CLAUDE.md 규칙)
+ai-model/label_*.json
 
 # KlueBERT 학습 모델 산출물 (HF Hub로만 배포, 합 ~1.27GB)
 ai-model/kluebert/2.AI학습모델파일/
@@ -38,3 +43,4 @@ hf-upload/
 
 # HF Space 로컬 작업 디렉토리 (Space repo는 별도 git 원격)
 hf-space/
+hf-space-remote/
