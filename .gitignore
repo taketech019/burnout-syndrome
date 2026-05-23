@@ -28,5 +28,10 @@ venv/
 ai-model/models/
 ai-model/offload/
 ai-model/koalpaca_merged/
+ai-model/.venv-nf4/
 ai-model/*.log
 ai-model/*.err
+ai-model/*.out
+ai-model/v2_*.txt
+# 라벨링 원천 데이터 (Git 커밋 금지, CLAUDE.md 규칙)
+ai-model/label_*.json

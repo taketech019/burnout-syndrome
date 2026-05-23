@@ -6,8 +6,8 @@ from config import KOALPACA_ENDPOINT_URL, KOALPACA_API_KEY
 
 _INSTRUCTION = "다음과 같은 상담기록을 보고 요약서를 작성해주세요."
 _MAX_INPUT_CHARS = 1900
-_MAX_NEW_TOKENS = 1024
-_TIMEOUT = 120
+_MAX_NEW_TOKENS = 500
+_TIMEOUT = 300
 _STOP = ["<|endoftext|>", "<|sep|>", "### 명령어:"]
 _SECTIONS = {
     "symptoms":             r"주요\s*증상",
@@ -54,8 +54,9 @@ def summarize(text: str) -> dict:
             json={
                 "prompt": _build_prompt(text),
                 "max_tokens": _MAX_NEW_TOKENS,
-                "temperature": 0.0,        # 학습 노트북의 do_sample=False (그리디) 매칭
-                "top_k": 1,                # 그리디 디코딩 강제
+                "temperature": 0.3,        # 양자화 후 그리디는 instruction-following 무너짐 → 약한 sampling
+                "top_k": 40,
+                "top_p": 0.9,
                 "repeat_penalty": 1.2,     # 노트북의 repetition_penalty=1.2
                 "repeat_last_n": 256,      # no_repeat_ngram_size=3 효과 근사
                 "stop": _STOP,
