@@ -14,11 +14,23 @@ REFERENCES_DIR = DATA_DIR / "references"
 
 CHROMA_DIR = ROOT_DIR / "chroma_db"
 
-EMBEDDING_MODEL = "BAAI/bge-m3"
+# F5 내담자/회기 저장소 (JSON 파일 영속화)
+STORAGE_DIR = DATA_DIR / "storage"
+PATIENTS_FILE = STORAGE_DIR / "patients.json"
+SESSIONS_FILE = STORAGE_DIR / "sessions.json"
 
-OPENAI_MODEL = "gpt-4o"
+# F4 RAG 임베딩 — PRD §F4: KoSBERT 한국어 특화
+EMBEDDING_MODEL = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
 
-# KoAlpaca (llama-server via Cloudflare Tunnel)
+# F4 RAG LLM — PRD §F4: Ollama 로컬 Qwen2.5 7B
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
+# F1 2단계 Gemini 28요인 분류 — Google AI Studio API
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+
+# KoAlpaca (Modal serverless, NF4 + LoRA attach, A10G 24GB)
 KOALPACA_ENDPOINT_URL = os.getenv("KOALPACA_ENDPOINT_URL", "")
 KOALPACA_API_KEY      = os.getenv("KOALPACA_API_KEY", "")
 
