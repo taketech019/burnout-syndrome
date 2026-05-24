@@ -71,9 +71,8 @@ CHART_PALETTE = {
 
 def apply_global_style() -> None:
     st.markdown(
-        f"""
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-        <style>
+        f"""<style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
         html, body, [class*="css"] {{
             font-family: 'Pretendard', -apple-system, BlinkMacSystemFont,
                 'Noto Sans KR', 'Segoe UI', sans-serif;
