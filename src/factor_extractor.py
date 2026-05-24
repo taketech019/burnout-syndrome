@@ -83,9 +83,15 @@ def extract_factors(
     classification: Optional[dict] = None,
     backend: str = "gemini_api",
 ) -> dict:
-    """28요인 0~3 점수 추출."""
+    """28요인 0~3 점수 추출. transcript 끝 척도 영역은 모델 입력 전 분리."""
     if not script or not script.strip():
         return _empty_result("입력 텍스트 비어 있음", backend=backend)
+
+    from src.transcript_utils import split_transcript_and_scale
+    script, _scale = split_transcript_and_scale(script)
+    if not script.strip():
+        return _empty_result("입력 텍스트 비어 있음", backend=backend)
+
     try:
         data = generate_json(_build_prompt(script), temperature=0.0, max_output_tokens=2048)
     except Exception as e:

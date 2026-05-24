@@ -274,10 +274,17 @@ def _merge(ka: Optional[dict], gemma: Optional[dict]) -> dict:
 def summarize(script: str) -> dict:
     """F3 요약. KoAlpaca 항상 1차 호출 + 빈 섹션 Gemma 보강.
 
+    transcript 끝 척도(PHQ-9 등) 영역은 분리되어 모델 입력에서 제외.
+
     반환: {ok, status, message, text, brief, sections, source,
            koalpaca_attempted, koalpaca_sections_filled, gemma_sections_filled}
     """
     if not script or not script.strip():
+        return _empty_result("입력 텍스트 비어 있음")
+
+    from src.transcript_utils import split_transcript_and_scale
+    script, _scale = split_transcript_and_scale(script)
+    if not script.strip():
         return _empty_result("입력 텍스트 비어 있음")
 
     transcript = _normalize_transcript(script)

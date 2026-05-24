@@ -42,3 +42,31 @@ def test_extract_factors_shape_with_text():
     assert set(r["factors"].keys()) == set(FACTOR_KEYS)
     for v in r["factors"].values():
         assert isinstance(v, int) and 0 <= v <= 3
+
+
+def test_extract_factors_strips_scale_before_prompt(monkeypatch):
+    """척도 평가 영역은 모델 입력에서 제외되어야 한다."""
+    from src import factor_extractor
+    captured_prompts = []
+
+    def fake_generate_json(prompt, **kwargs):
+        captured_prompts.append(prompt)
+        return {k: 0 for k in factor_extractor.FACTOR_KEYS}
+
+    monkeypatch.setattr(factor_extractor, "generate_json", fake_generate_json)
+    text = ("상담사: 욕구 작업 어떠셨어요?\n"
+            "내담자: 만족스러웠어요.\n"
+            "상담사: 1번 너무 많이 먹는다.\n"
+            "내담자: 2\n"
+            "상담사: 2번 기분이 가라앉는다.\n"
+            "내담자: 1\n"
+            "상담사: 3번 죽고 싶다.\n"
+            "내담자: 0")
+    factor_extractor.extract_factors(text, {"depression": 0, "anxiety": 0, "addiction": 0})
+    assert captured_prompts, "generate_json 호출 안 됨"
+    prompt = captured_prompts[0]
+    # 척도 텍스트가 프롬프트에 들어가면 안 됨
+    assert "1번 너무 많이 먹는다" not in prompt
+    assert "기분이 가라앉는다" not in prompt
+    # 본문은 들어가야 함
+    assert "욕구 작업" in prompt or "만족스러웠어요" in prompt

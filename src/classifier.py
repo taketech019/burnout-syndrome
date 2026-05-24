@@ -195,8 +195,15 @@ def classify_text(script: str) -> dict:
       - 'kluebert_local': 로컬 weights
       - 'kluebert_hf': HF Space
     실패 시 Gemma 폴백.
+
+    transcript 끝의 척도 평가(PHQ-9 등) 영역은 분리되어 모델 입력에서 제외.
     """
     if not script or not script.strip():
+        return _empty_result("입력 텍스트 비어 있음")
+
+    from src.transcript_utils import split_transcript_and_scale
+    script, _scale = split_transcript_and_scale(script)
+    if not script.strip():
         return _empty_result("입력 텍스트 비어 있음")
 
     backend = os.getenv("CLASSIFIER_BACKEND", "gemma").lower()

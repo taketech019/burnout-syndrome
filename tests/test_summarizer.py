@@ -129,3 +129,38 @@ def test_summarize_koalpaca_none_falls_back_to_gemma(monkeypatch):
     assert r["source"] == "gemma_only"
     assert r["koalpaca_attempted"] is False
     assert r["gemma_sections_filled"] == 4
+
+
+def test_summarize_strips_scale_before_model(monkeypatch):
+    """척도 평가 응답은 모델 입력에서 제외되어야 한다."""
+    from src import summarizer
+    captured_inputs = []
+
+    def fake_ka(t):
+        captured_inputs.append(("ka", t))
+        return None
+
+    def fake_gemma(t):
+        captured_inputs.append(("gemma", t))
+        return {
+            "sections": {k: "g" for k in summarizer._EMPTY_SECTIONS},
+            "brief": "g_brief", "ok": True, "source": "gemma_fallback",
+        }
+
+    monkeypatch.setattr(summarizer, "_try_koalpaca", fake_ka)
+    monkeypatch.setattr(summarizer, "_try_gemma_fallback", fake_gemma)
+    text = ("상담사: 오늘 어떠셨어요?\n"
+            "내담자: 잠을 잘 못 자요.\n"
+            "상담사: 1번 이전보다 너무 많이 먹거나 적게 먹는다.\n"
+            "내담자: 2\n"
+            "상담사: 2번 기분이 가라앉는다.\n"
+            "내담자: 1\n"
+            "상담사: 3번 죽고 싶다.\n"
+            "내담자: 0")
+    summarizer.summarize(text)
+    # KoAlpaca / Gemma 어느 쪽이든 모델 입력에 척도가 들어가면 안 됨
+    for _, inp in captured_inputs:
+        assert "1번 이전보다" not in inp
+        assert "기분이 가라앉는다" not in inp
+        # 본문은 살아 있어야
+        assert "잠을 잘 못 자요" in inp
