@@ -1374,7 +1374,7 @@ def render_dashboard():
         return
 
     backend = result.get("model_info", {}).get("backend", "unknown")
-    
+
     if backend == "mock":
         st.warning("현재 결과는 mock 분석 결과입니다. 실제 KlueBERT, KoAlpaca, RAG 모델 결과가 아닙니다.")
     elif backend == "koalpaca_api":
@@ -1535,7 +1535,7 @@ def render_report():
         '<div class="page-desc">KoAlpaca 요약 모델이 들어갈 위치입니다. 현재는 선택한 보고서 백엔드 결과를 표시합니다.</div>',
         unsafe_allow_html=True,
     )
-
+    
     result = st.session_state.analysis_result
 
     if result is None:
