@@ -905,8 +905,18 @@ def render_report() -> None:
     text = payload.get("text", "")
     sections = payload.get("sections", {})
     source = payload.get("source", "?")
+    ka_filled = payload.get("koalpaca_sections_filled", 0)
+    gemma_filled = payload.get("gemma_sections_filled", 0)
+    source_label = {
+        "koalpaca": "KoAlpaca (4/4 섹션 완전 응답)",
+        "koalpaca+gemma": f"KoAlpaca {ka_filled}/4 + Gemma 보강 {gemma_filled}/4",
+        "koalpaca_partial": f"KoAlpaca {ka_filled}/4 (부분 응답, Gemma 보강 실패)",
+        "gemma_fallback": "Gemma 폴백 (KoAlpaca 시도 → 빈 응답)",
+        "gemma_only": "Gemma 단독 (KoAlpaca endpoint 미설정/네트워크 실패)",
+        "none": "응답 없음",
+    }.get(source, source)
 
-    st.caption(f"요약 소스: `{source}`")
+    st.caption(f"요약 소스: `{source_label}`")
 
     st.markdown("#### 요약본")
     edited_brief = st.text_area(
