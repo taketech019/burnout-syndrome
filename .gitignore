@@ -36,3 +36,8 @@ ai-model/*.err
 cloudflared
 cloudflared.log
 streamlit.log
+
+#라벨링데이터
+data/raw/
+.streamlit/secrets.toml
+.env

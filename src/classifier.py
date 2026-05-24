@@ -120,9 +120,10 @@ def _clip_round_score(value: float) -> int:
 
 def _score_to_binary(score: int) -> int:
     """
-    0~3 점수를 서비스용 0/1 판별값으로 변환한다.
+    기존 호환용 함수.
+    더 이상 0/1 판별로 사용하지 않고, 0~3 점수를 그대로 반환한다.
     """
-    return int(score >= 1)
+    return score
 
 
 def _load_model_and_tokenizer(
@@ -275,7 +276,7 @@ def classify_text(text: str) -> Dict[str, Any]:
         )
 
         details[key] = result
-        classification[key] = int(result.get("label", 0))
+        classification[key] = int(result.get("score", 0))
         scores[key] = int(result.get("score", 0))
         raw_scores[key] = result.get("raw_score")
 
