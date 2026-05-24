@@ -1,0 +1,21 @@
+Koalpaca 기반 상담기록 요약보고서 생성 모델
+
+Model Summary
+- Koalpaca 4bit 모델 ("EleutherAI/polyglot-ko-12.8b")을 기반으로 상담기록 (string) 에 대하여 요약보고서를 생성하는 모델입니다.
+- 한국어 심리상담 채록 1,609 건의 데이터를 기반으로 학습 및 테스트가 이루어졌습니다.
+
+Input and Output
+- Input :  (string) 상담자와 내담자의 발화자 구분 표시가 되어 있는 상담내용 스크립트
+- Output : (string) 요약보고서 텍스트
+
+Task
+- 상담 후 녹취된 스크립트 데이터를 바탕으로 주요 증상, 위험요인, 개선 요인, 상담사의 개입 요인 등을 담은 요약보고서를 생성합니다
+
+Model 아키텍쳐
+- Koalpaca 4bit 모델 ("EleutherAI/polyglot-ko-12.8b") 기반으로 추가 학습 진행
+
+Training dataset
+- 한국어 심리상담 채록 1,609 건의 데이터를 기반으로 학습 및 테스트가 이루어졌습니다.
+
+License 정보:
+- Apache License 2.0

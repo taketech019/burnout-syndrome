@@ -1,0 +1,11 @@
+numpy
+torch
+transformers>=4.26.1,<=4.29.2
+tokenizers==0.12.1
+datasets
+peft
+accelerate
+bitsandbytes
+scikit-learn
+pandas
+openpyxl
