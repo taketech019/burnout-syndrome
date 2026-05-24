@@ -21,3 +21,7 @@ OPENAI_MODEL = "gpt-4o"
 # KoAlpaca (llama-server via Cloudflare Tunnel)
 KOALPACA_ENDPOINT_URL = os.getenv("KOALPACA_ENDPOINT_URL", "")
 KOALPACA_API_KEY      = os.getenv("KOALPACA_API_KEY", "")
+
+# KlueBERT (Hugging Face Spaces, free CPU) — sleep 시 cold-start 60~120s
+KLUEBERT_ENDPOINT_URL = os.getenv("KLUEBERT_ENDPOINT_URL", "")
+KLUEBERT_API_KEY      = os.getenv("KLUEBERT_API_KEY", "")
