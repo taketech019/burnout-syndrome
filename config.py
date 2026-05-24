@@ -24,12 +24,11 @@ SESSIONS_FILE = STORAGE_DIR / "sessions.json"
 # rag.embedding이 자동으로 Google text-embedding-004 로 폴백.
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "snunlp/KR-SBERT-V40K-klueNLI-augSTS")
 
-# F1/F4 LLM — 사용자 지시: gemma-4-31b-it (Google AI Studio).
-# Gemma는 JSON 모드를 지원하지 않으므로 호출 측에서 프롬프트 + 추출.
+# F1/F4 LLM — Gemini 2.5 Flash (TPM 1M, JSON 모드 native 지원).
+# Gemma 4 31B는 TPM 16K 한도 잦은 초과로 폐기 (29k자 transcript 9 호출에 TPM 초과).
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemma-4-31b-it")
-# Gemma 500 에러 / 빈 응답 발생 시 폴백 (Gemini 2.5 Flash는 JSON 모드 지원).
-GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.0-flash")
 
 # F3 KoAlpaca (Modal serverless)
 KOALPACA_ENDPOINT_URL = os.getenv("KOALPACA_ENDPOINT_URL", "")
