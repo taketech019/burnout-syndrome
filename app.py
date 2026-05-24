@@ -429,17 +429,20 @@ def render_dashboard() -> None:
 
     st.divider()
     st.markdown("#### HIRA 인구통계 비교")
-    p = db.get_patient(pid)
-    primary = (
-        "depression" if classification.get("depression")
-        else "anxiety" if classification.get("anxiety")
-        else "addiction"
-    )
-    h = hira_lookup(p, primary)
-    if h["available"]:
-        st.info(h["summary_text"])
+    if not any(classification.values()):
+        st.caption("분류 결과가 모두 0(정상군) — HIRA 비교 생략.")
     else:
-        st.caption(h["summary_text"])
+        p = db.get_patient(pid)
+        primary = (
+            "depression" if classification.get("depression")
+            else "anxiety" if classification.get("anxiety")
+            else "addiction"
+        )
+        h = hira_lookup(p, primary)
+        if h["available"]:
+            st.info(h["summary_text"])
+        else:
+            st.caption(h["summary_text"])
 
 
 def _render_trend_chart(patient_id: str) -> None:
