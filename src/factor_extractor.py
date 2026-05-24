@@ -1,7 +1,7 @@
 """src/factor_extractor.py — F1 2단계: 28요인 0~3 점수 추출 (Gemma 4 31B).
 
-새 UI 정의 28키 (영문) + 한국어 표시명. Gemma 단일 호출로 점수 산출.
-신규 시그니처: extract_factors(script, classification, backend) -> dict
+사용자 제공 디자인의 SYMPTOM_SCORES 체계 (한국어 키, 5 카테고리).
+- 우울 9 / 우울·위험 1 / 불안 8 / 중독 7 / 중독·기능 3 = 28
 """
 import logging
 from typing import Optional
@@ -12,53 +12,31 @@ log = logging.getLogger(__name__)
 
 
 FACTOR_KEYS = [
-    # 우울 10
-    "depressive_mood", "worthlessness", "guilt", "impaired_cognition",
-    "suicidal", "anhedonia", "psychomotor_changes", "weight_appetite",
-    "sleep_disturbance", "fatigue",
-    # 불안 4
-    "anxiety", "loss_of_control", "social_avoidance", "physical_symptom",
-    # 중독 4
-    "craving", "withdrawal", "tolerance", "social_problem",
-    # 상담사 개입 9
-    "sympathy_support", "clarification_reflection", "cognitive_restructuring",
-    "information_provision", "goal_setting", "task_assignment",
-    "behavioral_intervention", "coping_skill_training", "structuring",
-    # 변화 1
-    "motivation_for_change",
+    # 우울 9
+    "우울한 기분", "무가치감", "죄책감", "사고력 저하", "흥미감소",
+    "정신운동변화", "체중/식욕변화", "수면문제", "피로감",
+    # 우울/위험 1
+    "자살생각",
+    # 불안 8
+    "불안감", "비현실감", "통제력상실감", "불안조절곤란", "집중력저하",
+    "사회적상황회피", "신체증상", "과민성",
+    # 중독 7
+    "조절실패", "갈망", "거짓말", "내성", "금단", "현저성", "자원투자",
+    # 중독/기능 3
+    "자기관리", "사회적문제발생", "부정적 결과",
 ]
 assert len(FACTOR_KEYS) == 28
 
-FACTOR_LABELS = {
-    "depressive_mood": "우울한 기분",
-    "worthlessness": "무가치감",
-    "guilt": "죄책감",
-    "impaired_cognition": "사고력/집중력 저하",
-    "suicidal": "자살 관련 사고",
-    "anhedonia": "흥미 감소",
-    "psychomotor_changes": "정신운동 변화",
-    "weight_appetite": "체중/식욕 변화",
-    "sleep_disturbance": "수면 문제",
-    "fatigue": "피로감",
-    "anxiety": "불안감",
-    "loss_of_control": "통제감 상실",
-    "social_avoidance": "사회적 회피",
-    "physical_symptom": "신체 증상",
-    "craving": "갈망",
-    "withdrawal": "금단",
-    "tolerance": "내성",
-    "social_problem": "사회적 문제",
-    "sympathy_support": "공감 및 지지",
-    "clarification_reflection": "명료화 및 반영",
-    "cognitive_restructuring": "인지 재구성",
-    "information_provision": "정보 제공",
-    "goal_setting": "목표 설정",
-    "task_assignment": "과제 부여",
-    "behavioral_intervention": "행동 개입",
-    "coping_skill_training": "대처기술 훈련",
-    "structuring": "구조화",
-    "motivation_for_change": "변화 동기",
+FACTOR_CATEGORIES = {
+    **{k: "우울" for k in FACTOR_KEYS[:9]},
+    "자살생각": "우울/위험",
+    **{k: "불안" for k in FACTOR_KEYS[10:18]},
+    **{k: "중독" for k in FACTOR_KEYS[18:25]},
+    **{k: "중독/기능" for k in FACTOR_KEYS[25:28]},
 }
+
+# FACTOR_LABELS: 한국어 키 그대로 (외부 코드 호환 alias)
+FACTOR_LABELS = {k: k for k in FACTOR_KEYS}
 
 
 def _zero_factors() -> dict:
@@ -83,20 +61,20 @@ _PROMPT = """당신은 임상심리 전문가입니다. 다음 상담 텍스트�
 - 2: 중간 / 반복 언급
 - 3: 강함 / 명확한 핵심 증상
 
-**28 요인** (영문 키 = 한국어 의미)
+**28 요인** (괄호 안은 카테고리)
 {labels}
 
 **상담 텍스트**
 {text}
 
 **출력 형식**: 단일 JSON 객체로만. 설명·코드 블록·메타 설명 금지.
-{{"depressive_mood": 0~3, "worthlessness": 0~3, ..., "motivation_for_change": 0~3}}
-28개 키가 정확히 모두 포함되어야 합니다.
+키는 위 한국어 라벨 그대로 사용. 28개 키가 정확히 모두 포함되어야 합니다.
+{{"우울한 기분": 0~3, "무가치감": 0~3, ..., "부정적 결과": 0~3}}
 """
 
 
 def _build_prompt(script: str) -> str:
-    lines = "\n".join(f"- {k}: {FACTOR_LABELS[k]}" for k in FACTOR_KEYS)
+    lines = "\n".join(f"- {k} ({FACTOR_CATEGORIES[k]})" for k in FACTOR_KEYS)
     return _PROMPT.replace("{labels}", lines).replace("{text}", script[:8000])
 
 
@@ -105,18 +83,15 @@ def extract_factors(
     classification: Optional[dict] = None,
     backend: str = "gemini_api",
 ) -> dict:
-    """28요인 0~3 점수 추출. backend는 정보용 (현재는 항상 Gemma)."""
+    """28요인 0~3 점수 추출."""
     if not script or not script.strip():
         return _empty_result("입력 텍스트 비어 있음", backend=backend)
-
     try:
         data = generate_json(_build_prompt(script), temperature=0.0, max_output_tokens=2048)
     except Exception as e:
         return _empty_result(f"Gemma 28요인 호출 실패: {e}", backend=backend)
-
     if not isinstance(data, dict):
         return _empty_result("Gemma 28요인 JSON 파싱 실패", backend=backend)
-
     factors = _zero_factors()
     for k in FACTOR_KEYS:
         try:
@@ -124,7 +99,6 @@ def extract_factors(
         except (TypeError, ValueError):
             v = 0
         factors[k] = max(0, min(3, v))
-
     return {
         "ok": True,
         "status": "success",
