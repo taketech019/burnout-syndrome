@@ -197,11 +197,15 @@ _GEMMA_BRIEF_PROMPT = """다음 상담 회기를 한국어 **한 문단(2~4문�
 
 
 def _gen_brief(transcript: str) -> str:
-    """Gemma 1단락 요약 — 보고서 페이지 "요약본" textarea용."""
+    """Gemma 1단락 요약 — 보고서 페이지 "요약본" textarea용.
+
+    Gemini 2.5 Flash thinking 모드는 reasoning에 토큰 소비 — 512에서는 잘림.
+    2048로 충분한 여유 확보.
+    """
     try:
         text = generate(
             _GEMMA_BRIEF_PROMPT.replace("{text}", transcript[:_MAX_INPUT_CHARS]),
-            temperature=0.2, max_output_tokens=512,
+            temperature=0.2, max_output_tokens=2048,
         )
         return strip_reasoning(text).strip()
     except Exception as e:
@@ -212,8 +216,10 @@ def _gen_brief(transcript: str) -> str:
 def _try_gemma_fallback(transcript: str) -> dict:
     try:
         capped = transcript[:_MAX_INPUT_CHARS]
+        # max_output_tokens 8192 — Gemini 2.5 Flash는 thinking 모드라 reasoning에 토큰 소비.
+        # 2048에서는 4섹션 중 위험 요인쯤에서 잘림. 8192로 여유 확보.
         text = generate(_GEMMA_PROMPT.replace("{text}", capped),
-                        temperature=0.2, max_output_tokens=2048)
+                        temperature=0.2, max_output_tokens=8192)
         cleaned = strip_reasoning(text)
         sections = _parse_sections(cleaned)
         brief = _gen_brief(transcript)

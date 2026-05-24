@@ -99,7 +99,9 @@ def extract_factors(
         return _empty_result("입력 텍스트 비어 있음", backend=backend)
 
     try:
-        data = generate_json(_build_prompt(script), temperature=0.0, max_output_tokens=2048)
+        # max_output_tokens 4096 — Gemini 2.5 Flash thinking 모드 대비.
+        # 28개 키 0~3 JSON 응답에 충분.
+        data = generate_json(_build_prompt(script), temperature=0.0, max_output_tokens=4096)
     except Exception as e:
         return _empty_result(f"Gemma 28요인 호출 실패: {e}", backend=backend)
     if not isinstance(data, dict):
