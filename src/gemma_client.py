@@ -134,7 +134,7 @@ def generate_json(prompt: str, **kwargs) -> Optional[Any]:
 
 _REASONING_BULLET = re.compile(r"^\s*\*\s+[A-Za-z][A-Za-z\s]+\d*\s*:.*$", re.MULTILINE)
 _CONSTRAINT_LINE = re.compile(
-    r"^\s*(\*|\d+\.)\s+(Role|Constraint|Goal|Input|Output|Task|Step|Note|Plan|Reasoning|Format|Draft|Material|Question|Answer|Context|Source|Reference|Analysis|Approach|Strategy)[\s\d]*[:.].*$",
+    r"^[\s\*#>•\-]*\**(?:Final\s+Answer|Role|Constraint|Goal|Input|Output|Task|Step|Note|Plan|Reasoning|Format|Draft|Material|Question|Answer|Context|Source|Reference|Analysis|Approach|Strategy|Summary|Synthesis|Final|Outline|Thought)\**[\s\d]*[:.].*$",
     re.MULTILINE,
 )
 
@@ -185,9 +185,36 @@ def strip_reasoning(text: str) -> str:
         prev_empty = is_empty
 
     result = "\n".join(out_lines).strip()
-    if result:
-        return result
 
-    # Fallback: 원본에서 한국어 단락만 추출
-    korean_paragraphs = [p for p in re.split(r"\n\s*\n", text) if _looks_korean(p)]
-    return "\n\n".join(korean_paragraphs) if korean_paragraphs else text
+    # 각 라인 시작의 영문 라벨 prefix(`*Draft 1:*`, `* Role:`, `**Material**:`)만 제거
+    # 라벨 뒤 한국어 본문은 그대로 살림
+    result = _CONSTRAINT_LINE.sub("", result)
+    # 위 substitution이 라인 전체를 매치하므로 빈 라인 정리
+    result = re.sub(r"\n\s*\n+", "\n\n", result)
+    # 라인 시작에서 prefix만 제거하는 추가 패스 (라벨 뒤에 한국어가 있는 경우)
+    result = re.sub(
+        r"^[\s\*#>•\-]*\**(?:Final\s+Answer|Role|Constraint|Goal|Input|Output|Task|Step|"
+        r"Note|Plan|Reasoning|Format|Draft|Material|Question|Answer|Context|Source|Reference|"
+        r"Analysis|Approach|Strategy|Summary|Synthesis|Final|Outline|Thought)"
+        r"\**[\s\d]*[:.][\*\s]*",
+        "",
+        result,
+        flags=re.MULTILINE,
+    ).strip()
+
+    if not result:
+        # Fallback: 원본에서 한국어 단락만 추출
+        korean_paragraphs = [p for p in re.split(r"\n\s*\n", text) if _looks_korean(p)]
+        result = "\n\n".join(korean_paragraphs) if korean_paragraphs else text
+
+    # 최종 한 번 더 prefix 정리 (어느 경로든 leading 영문 라벨 제거)
+    result = re.sub(
+        r"^[\s\*#>•\-]*\**(?:Final\s+Answer|Role|Constraint|Goal|Input|Output|Task|Step|"
+        r"Note|Plan|Reasoning|Format|Draft|Material|Question|Answer|Context|Source|Reference|"
+        r"Analysis|Approach|Strategy|Summary|Synthesis|Final|Outline|Thought)"
+        r"\**[\s\d]*[:.][\*\s]*",
+        "",
+        result,
+        flags=re.MULTILINE,
+    ).strip()
+    return result
