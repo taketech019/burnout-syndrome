@@ -152,7 +152,15 @@ def make_session_record(
     data: Dict[str, Any],
 ) -> Dict[str, Any]:
     filename = normalize_text(data.get("filename")) or Path(inner_json_name).stem
-    client_id = normalize_text(data.get("id")) or filename
+
+    raw_id = normalize_text(data.get("id")) or filename
+    raw_class = normalize_text(data.get("class")) or "UNKNOWN"
+
+    safe_split = re.sub(r"[^A-Za-z0-9가-힣_-]+", "_", split)
+    safe_class = re.sub(r"[^A-Za-z0-9가-힣_-]+", "_", raw_class)
+    safe_id = re.sub(r"[^A-Za-z0-9가-힣_-]+", "_", raw_id)
+
+    client_id = f"{safe_split}_{safe_class}_{safe_id}"
     session = infer_session_from_name(zip_path.name + " " + inner_json_name)
 
     paragraphs = data.get("paragraph", [])

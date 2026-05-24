@@ -4,6 +4,7 @@
 # =========================================================
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
@@ -1143,8 +1144,9 @@ def render_sidebar():
         st.caption("상담 기록 분석 & 보고서 자동화")
 
         st.info(
-            f"현재 모델 백엔드: `{MODEL_BACKEND}`\n\n"
-            "현재 단계에서는 mock 모델로 동작합니다."
+            f"보고서 백엔드: `{MODEL_BACKEND}`\n\n"
+            f"분류 백엔드: `{CLASSIFIER_BACKEND}`\n\n"
+            f"28요인 백엔드: `{FACTOR_BACKEND}`"
         )
 
         st.divider()
@@ -1252,8 +1254,13 @@ def render_session_cards():
     )
 
     client_sessions = SESSIONS[SESSIONS["내담자 ID"] == st.session_state.selected_client].copy()
-    client_sessions["_date"] = pd.to_datetime(client_sessions["상담일"], errors="coerce")
-    client_sessions = client_sessions.sort_values("_date", ascending=False).drop(columns=["_date"])
+
+    def _session_order(value: Any) -> int:
+        match = re.search(r"(\d+)", str(value or ""))
+        return int(match.group(1)) if match else 999
+
+    client_sessions["_session_order"] = client_sessions["회기"].apply(_session_order)
+    client_sessions = client_sessions.sort_values("_session_order", ascending=True).drop(columns=["_session_order"])
 
     if client_sessions.empty:
         st.info("기존 상담 내역이 없습니다. 새 상담 내역을 추가해 주세요.")
@@ -1403,7 +1410,8 @@ def render_dashboard():
             if classifier_message:
                 st.caption(classifier_message)
 
-    if backend == "mock":st.warning("현재 보고서 생성 백엔드는 mock입니다. KoAlpaca API 보고서 결과가 아닙니다.")
+    if backend == "mock":
+        st.warning("현재 보고서 생성 백엔드는 mock입니다. KoAlpaca API 보고서 결과가 아닙니다.")
     elif backend == "koalpaca_api":
         st.info("현재 보고서 생성 백엔드는 KoAlpaca API로 설정되어 있습니다.")
     else:
@@ -1441,9 +1449,9 @@ def render_dashboard():
     factor_df = build_factor_dataframe(factors)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("우울 예측 라벨", classification.get("depression", 0))
-    c2.metric("불안 예측 라벨", classification.get("anxiety", 0))
-    c3.metric("중독 예측 라벨", classification.get("addiction", 0))
+    c1.metric("우울 0~3점", classification.get("depression", 0))
+    c2.metric("불안 0~3점", classification.get("anxiety", 0))
+    c3.metric("중독 0~3점", classification.get("addiction", 0))
     c4.metric("보고서 백엔드", result["model_info"]["backend"])
     
     st.markdown("### 데이터셋 원본 라벨")
@@ -1532,25 +1540,25 @@ def render_dashboard():
 def render_report():
     st.markdown('<div class="section-title">AI 보고서</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-desc">Koalpaca 요약 모델이 들어갈 위치입니다. 현재는 mock 요약 결과를 표시합니다.</div>',
+        '<div class="page-desc">KoAlpaca 요약 모델이 들어갈 위치입니다. 현재는 선택한 보고서 백엔드 결과를 표시합니다.</div>',
         unsafe_allow_html=True,
     )
-    
+
+    result = st.session_state.analysis_result
+
+    if result is None:
+        st.info("아직 분석 결과가 없습니다. 먼저 상담내역 기록·추가 화면에서 AI 분석을 실행하세요.")
+        return
+
     backend = result.get("model_info", {}).get("backend", "unknown")
     summarizer_name = result.get("model_info", {}).get("summarizer", "unknown")
-    
+
     if backend == "mock":
         st.warning("현재 보고서는 mock 요약 결과입니다. 실제 KoAlpaca API 결과가 아닙니다.")
     elif backend == "koalpaca_api":
         st.info(f"보고서 생성 백엔드: {summarizer_name}")
     else:
         st.info(f"보고서 생성 백엔드: {summarizer_name}")
-        
-    result = st.session_state.analysis_result
-
-    if result is None:
-        st.info("아직 분석 결과가 없습니다. 먼저 상담내역 기록·추가 화면에서 AI 분석을 실행하세요.")
-        return
 
     report_text = build_report_text(result)
 

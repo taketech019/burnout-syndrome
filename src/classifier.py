@@ -5,7 +5,7 @@ KlueBERT 기반 우울/불안/중독 분류 모듈.
 현재 모델 구조:
 - depression, anxiety, addiction 모델이 각각 따로 존재한다.
 - 각 모델은 0~3 회귀 점수를 출력한다.
-- 서비스에서는 점수 0 = 음성, 점수 1~3 = 양성으로 변환한다.
+- 서비스에서도 원본 모델과 동일하게 0~3 점수를 유지한다.
 
 Hugging Face model repo 예:
 - dkslanjrkehlsmsrjdi/trained_model_kluebert_depression
@@ -152,7 +152,7 @@ def _predict_single_score(
     max_length: int = 512,
 ) -> Dict[str, Any]:
     """
-    단일 질환 모델에 대해 0~3 점수와 0/1 판별값을 반환한다.
+    단일 질환 모델에 대해 회귀 원점수와 0~3 점수를 반환한다.
 
     메모리 절약을 위해 모델을 사용한 뒤 즉시 삭제한다.
     """
@@ -239,9 +239,9 @@ def classify_text(text: str) -> Dict[str, Any]:
         "status": str,
         "message": str,
         "classification": {
-            "depression": 0 또는 1,
-            "anxiety": 0 또는 1,
-            "addiction": 0 또는 1
+            "depression": 0~3,
+            "anxiety": 0~3,
+            "addiction": 0~3
         },
         "scores": {
             "depression": 0~3,

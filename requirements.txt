@@ -10,3 +10,4 @@ torch
 transformers
 safetensors
 pypdf==4.2.0
+openpyxl
