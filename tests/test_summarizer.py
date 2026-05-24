@@ -41,3 +41,91 @@ def test_summarize_empty_brief_field():
     r = summarize("")
     assert "brief" in r
     assert r["brief"] == ""
+
+
+def test_summarize_calls_koalpaca_even_short(monkeypatch):
+    """짧은 입력에서도 KoAlpaca를 호출해야 한다."""
+    from src import summarizer
+    calls = {"koalpaca": 0, "gemma": 0}
+
+    def fake_ka(t):
+        calls["koalpaca"] += 1
+        return {
+            "sections": {k: "" for k in summarizer._EMPTY_SECTIONS},
+            "brief": "", "ok": True, "source": "koalpaca",
+        }
+
+    def fake_gemma(t):
+        calls["gemma"] += 1
+        return {
+            "sections": {k: f"gemma_{k}" for k in summarizer._EMPTY_SECTIONS},
+            "brief": "g_brief", "ok": True, "source": "gemma_fallback",
+        }
+
+    monkeypatch.setattr(summarizer, "_try_koalpaca", fake_ka)
+    monkeypatch.setattr(summarizer, "_try_gemma_fallback", fake_gemma)
+    r = summarizer.summarize("내담자: 짧은 입력입니다.")
+    assert calls["koalpaca"] == 1, "KoAlpaca 호출 안 됨"
+    assert r["koalpaca_attempted"] is True
+
+
+def test_summarize_merges_koalpaca_partial_with_gemma(monkeypatch):
+    """KoAlpaca 2섹션 + Gemma 2섹션 보강."""
+    from src import summarizer
+    ka_sections = {"symptoms": "ka_sym", "risk_factors": "ka_risk",
+                   "improvement_factors": "", "intervention_factors": ""}
+    gemma_sections = {"symptoms": "g_sym", "risk_factors": "g_risk",
+                      "improvement_factors": "g_imp", "intervention_factors": "g_int"}
+    monkeypatch.setattr(
+        summarizer, "_try_koalpaca",
+        lambda t: {"sections": ka_sections, "brief": "", "ok": True, "source": "koalpaca"},
+    )
+    monkeypatch.setattr(
+        summarizer, "_try_gemma_fallback",
+        lambda t: {"sections": gemma_sections, "brief": "g_brief", "ok": True, "source": "gemma_fallback"},
+    )
+    r = summarizer.summarize("내담자: 테스트")
+    assert r["source"] == "koalpaca+gemma"
+    assert r["koalpaca_sections_filled"] == 2
+    assert r["gemma_sections_filled"] == 2
+    assert r["sections"]["symptoms"] == "ka_sym"
+    assert r["sections"]["risk_factors"] == "ka_risk"
+    assert r["sections"]["improvement_factors"] == "g_imp"
+    assert r["sections"]["intervention_factors"] == "g_int"
+
+
+def test_summarize_koalpaca_full_no_gemma_call(monkeypatch):
+    """KoAlpaca가 4섹션 다 채우면 Gemma 호출 안 함."""
+    from src import summarizer
+    full_sections = {k: f"ka_{k}" for k in summarizer._EMPTY_SECTIONS}
+    gemma_called = [False]
+
+    monkeypatch.setattr(
+        summarizer, "_try_koalpaca",
+        lambda t: {"sections": full_sections, "brief": "ka_brief", "ok": True, "source": "koalpaca"},
+    )
+
+    def gemma_spy(t):
+        gemma_called[0] = True
+        return None
+
+    monkeypatch.setattr(summarizer, "_try_gemma_fallback", gemma_spy)
+    r = summarizer.summarize("내담자: 충분히 긴 텍스트입니다. " * 100)
+    assert r["source"] == "koalpaca"
+    assert r["koalpaca_sections_filled"] == 4
+    assert gemma_called[0] is False, "KoAlpaca 완전 성공 시 Gemma 호출되면 안 됨"
+
+
+def test_summarize_koalpaca_none_falls_back_to_gemma(monkeypatch):
+    """KoAlpaca endpoint 미설정/실패 시 Gemma만."""
+    from src import summarizer
+    monkeypatch.setattr(summarizer, "_try_koalpaca", lambda t: None)
+    monkeypatch.setattr(
+        summarizer, "_try_gemma_fallback",
+        lambda t: {"sections": {k: "g" for k in summarizer._EMPTY_SECTIONS},
+                   "brief": "g_brief", "ok": True, "source": "gemma_fallback"},
+    )
+    r = summarizer.summarize("내담자: 짧은 입력입니다.")
+    assert r["source"] == "gemma_only"
+    assert r["koalpaca_attempted"] is False
+    assert r["gemma_sections_filled"] == 4

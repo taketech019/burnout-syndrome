@@ -202,7 +202,7 @@ def _try_gemma_fallback(transcript: str) -> dict:
         return {
             "ok": True,
             "status": "fallback",
-            "message": "Gemma 4 31B 폴백 (KoAlpaca skip)",
+            "message": "Gemma 4 31B",
             "text": _sections_to_text(sections),
             "brief": brief,
             "sections": sections,
@@ -212,20 +212,83 @@ def _try_gemma_fallback(transcript: str) -> dict:
         return _empty_result(f"Gemma 폴백 실패: {e}")
 
 
+# ── 머지 헬퍼 ─────────────────────────────────────────────────────────────────
+
+
+def _has_empty_section(sections: dict) -> bool:
+    return any(not (sections.get(k) or "").strip() for k in _EMPTY_SECTIONS)
+
+
+def _merge(ka: Optional[dict], gemma: Optional[dict]) -> dict:
+    """KoAlpaca 1차 + Gemma 보강 머지. source 세분화 + 채움 비율 추적."""
+    ka_sections = (ka or {}).get("sections", dict(_EMPTY_SECTIONS))
+    gemma_sections = (gemma or {}).get("sections", dict(_EMPTY_SECTIONS))
+
+    merged_sections = {}
+    ka_filled, gemma_filled = 0, 0
+    for k in _EMPTY_SECTIONS:
+        ka_val = (ka_sections.get(k) or "").strip()
+        gemma_val = (gemma_sections.get(k) or "").strip()
+        if ka_val:
+            merged_sections[k] = ka_val
+            ka_filled += 1
+        elif gemma_val:
+            merged_sections[k] = gemma_val
+            gemma_filled += 1
+        else:
+            merged_sections[k] = ""
+
+    ka_attempted = ka is not None
+    if ka_filled == 4:
+        source = "koalpaca"
+    elif ka_filled > 0 and gemma_filled > 0:
+        source = "koalpaca+gemma"
+    elif ka_filled > 0:
+        source = "koalpaca_partial"
+    elif gemma_filled > 0:
+        source = "gemma_fallback" if ka_attempted else "gemma_only"
+    else:
+        source = "none"
+
+    # brief: Gemma 우선, 없으면 KoAlpaca
+    brief = (gemma or {}).get("brief", "") or (ka or {}).get("brief", "")
+
+    ok = any(merged_sections.values())
+    return {
+        "ok": ok,
+        "status": "success" if ok else "error",
+        "message": f"섹션 채움 — koalpaca {ka_filled}/4, gemma {gemma_filled}/4",
+        "text": _sections_to_text(merged_sections),
+        "brief": brief,
+        "sections": merged_sections,
+        "source": source,
+        "koalpaca_attempted": ka_attempted,
+        "koalpaca_sections_filled": ka_filled,
+        "gemma_sections_filled": gemma_filled,
+    }
+
+
 # ── 공개 진입점 ────────────────────────────────────────────────────────────────
 
 
 def summarize(script: str) -> dict:
-    """F3 요약. 반환: {ok, status, message, text, sections, source}."""
+    """F3 요약. KoAlpaca 항상 1차 호출 + 빈 섹션 Gemma 보강.
+
+    반환: {ok, status, message, text, brief, sections, source,
+           koalpaca_attempted, koalpaca_sections_filled, gemma_sections_filled}
+    """
     if not script or not script.strip():
         return _empty_result("입력 텍스트 비어 있음")
 
     transcript = _normalize_transcript(script)
     capped = transcript[:_MAX_INPUT_CHARS]
 
-    if len(transcript) >= _MIN_INPUT_CHARS:
-        ka = _try_koalpaca(capped)
-        if ka and ka.get("ok"):
-            return ka
+    # 1) KoAlpaca 항상 1차 시도 (길이 무관)
+    ka_result = _try_koalpaca(capped)
 
-    return _try_gemma_fallback(transcript)
+    # 2) 빈 섹션 있으면 Gemma 보강
+    ka_sections = (ka_result or {}).get("sections", dict(_EMPTY_SECTIONS))
+    needs_gemma = ka_result is None or _has_empty_section(ka_sections)
+    gemma_result = _try_gemma_fallback(transcript) if needs_gemma else None
+
+    return _merge(ka_result, gemma_result)
