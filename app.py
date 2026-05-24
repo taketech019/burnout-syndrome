@@ -5,7 +5,8 @@
 
 import json
 from datetime import datetime
-from typing import Dict, Any, List
+from pathlib import Path
+from typing import Dict, Any, List, Tuple
 
 import pandas as pd
 import plotly.express as px
@@ -39,9 +40,11 @@ DEMO_MODE = str(get_secret("DEMO_MODE", "true")).lower() == "true"
 # 나중에 3단계 KlueBERT 모델 코드, 4단계 Koalpaca 모델 코드를 추가한 뒤
 # MODEL_BACKEND 값을 aihub_local 등으로 바꾸면 됨.
 MODEL_BACKEND = get_secret("MODEL_BACKEND", "mock")
+FACTOR_BACKEND = get_secret("FACTOR_BACKEND", "mock")
+CLASSIFIER_BACKEND = get_secret("CLASSIFIER_BACKEND", "mock")
 
 GEMINI_API_KEY = get_secret("GEMINI_API_KEY", "")
-GEMINI_MODEL = get_secret("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = get_secret("GEMINI_MODEL", "gemini-2.5-flash")
 
 CHROMA_DB_PATH = get_secret("CHROMA_DB_PATH", "./chroma_db")
 RAG_EMBEDDING_MODEL = get_secret("RAG_EMBEDDING_MODEL", "BAAI/bge-m3")
@@ -124,6 +127,194 @@ DEFAULT_DIALOGUE = pd.DataFrame(
     }
 )
 
+# =========================================================
+# processed 라벨링데이터 연결
+# =========================================================
+PROCESSED_SESSIONS_PATH = Path("data/processed/sessions.jsonl")
+
+
+def _script_to_dialogue_df(script: str) -> pd.DataFrame:
+    """
+    sessions.jsonl의 script 문자열을 Streamlit data_editor용 DataFrame으로 변환한다.
+    """
+    rows = []
+
+    for line in str(script or "").split("\n"):
+        line = line.strip()
+
+        if not line:
+            continue
+
+        if ":" in line:
+            speaker, utterance = line.split(":", 1)
+            speaker = speaker.strip()
+            utterance = utterance.strip()
+        else:
+            speaker = "내담자"
+            utterance = line
+
+        if speaker not in ["상담사", "내담자"]:
+            speaker = "내담자"
+
+        rows.append(
+            {
+                "화자": speaker,
+                "발화": utterance,
+            }
+        )
+
+    if not rows:
+        return DEFAULT_DIALOGUE.copy()
+
+    return pd.DataFrame(rows)
+
+
+def _format_session_label(value: Any) -> str:
+    """
+    session 값을 화면용 회기명으로 변환한다.
+    """
+    text = str(value or "").strip()
+
+    if not text or text == "unknown":
+        return "회기미상"
+
+    if text.endswith("회기"):
+        return text
+
+    return f"{text}회기"
+
+
+def load_processed_sessions() -> Tuple[pd.DataFrame, pd.DataFrame, Dict[Tuple[str, str], pd.DataFrame]]:
+    """
+    data/processed/sessions.jsonl이 있으면 실제 라벨링데이터 기반으로
+    CLIENTS, SESSIONS, SESSION_DIALOGUES를 생성한다.
+
+    파일이 없거나 읽기 실패 시 기존 데모 데이터를 유지한다.
+    """
+    if not PROCESSED_SESSIONS_PATH.exists():
+        return CLIENTS, SESSIONS, {}
+
+    try:
+        raw = pd.read_json(PROCESSED_SESSIONS_PATH, lines=True)
+
+        if raw.empty:
+            return CLIENTS, SESSIONS, {}
+
+        raw["client_id"] = raw["client_id"].astype(str)
+        raw["회기"] = raw["session"].apply(_format_session_label)
+
+        # 내담자 목록 생성
+        clients = (
+            raw.sort_values(["client_id", "session"])
+            .groupby("client_id", as_index=False)
+            .agg(
+                {
+                    "gender": "first",
+                    "age": "first",
+                    "class": "first",
+                    "split": "first",
+                    "회기": "last",
+                }
+            )
+        )
+
+        def age_band(age: Any) -> str:
+            try:
+                age = int(age)
+                return f"{age // 10 * 10}대"
+            except Exception:
+                return "미상"
+
+        def counseling_type(row: pd.Series) -> str:
+            cls = str(row.get("class", "")).upper()
+
+            if "DEPRESSION" in cls:
+                return "우울"
+            if "ANXIETY" in cls:
+                return "불안"
+            if "ADDICTION" in cls:
+                return "중독"
+            if "NORMAL" in cls:
+                return "일반군"
+
+            return cls or "미상"
+
+        clients["내담자 ID"] = clients["client_id"]
+        clients["이름"] = clients["client_id"]
+        clients["성별"] = clients["gender"].replace({"여": "여성", "남": "남성"})
+        clients["연령대"] = clients["age"].apply(age_band)
+        clients["지역"] = clients["split"]
+        clients["상담 유형"] = clients.apply(counseling_type, axis=1)
+        clients["최근 회기"] = clients["회기"]
+        clients["상태"] = "전처리 데이터"
+
+        clients = clients[
+            [
+                "내담자 ID",
+                "이름",
+                "성별",
+                "연령대",
+                "지역",
+                "상담 유형",
+                "최근 회기",
+                "상태",
+            ]
+        ].reset_index(drop=True)
+
+        # 회기 목록 생성
+        sessions = raw.copy()
+        sessions["내담자 ID"] = sessions["client_id"]
+        sessions["상담일"] = sessions["split"]
+        sessions["상담 주제"] = sessions["class"].fillna("상담 회기")
+        sessions["보고서 상태"] = "전처리 완료"
+
+        sessions = sessions[
+            [
+                "내담자 ID",
+                "회기",
+                "상담일",
+                "상담 주제",
+                "보고서 상태",
+                "script",
+                "summary",
+                "filename",
+                "split",
+                "class",
+                "depression",
+                "anxiety",
+                "addiction",
+            ]
+        ].reset_index(drop=True)
+
+        # 회기별 상담 발화 DataFrame 생성
+        session_dialogues: Dict[Tuple[str, str], pd.DataFrame] = {}
+
+        for _, row in sessions.iterrows():
+            key = (row["내담자 ID"], row["회기"])
+            session_dialogues[key] = _script_to_dialogue_df(row.get("script", ""))
+
+        return clients, sessions, session_dialogues
+
+    except Exception as error:
+        st.warning(f"processed sessions 데이터를 읽지 못해 데모 데이터를 사용합니다: {error}")
+        return CLIENTS, SESSIONS, {}
+    
+CLIENTS, SESSIONS, SESSION_DIALOGUES = load_processed_sessions()
+
+DEFAULT_CLIENT_ID = CLIENTS.iloc[0]["내담자 ID"] if not CLIENTS.empty else "C-001"
+
+_DEFAULT_CLIENT_SESSIONS = SESSIONS[SESSIONS["내담자 ID"] == DEFAULT_CLIENT_ID]
+if not _DEFAULT_CLIENT_SESSIONS.empty:
+    DEFAULT_SESSION_NAME = _DEFAULT_CLIENT_SESSIONS.iloc[0]["회기"]
+else:
+    DEFAULT_SESSION_NAME = "새 상담"
+
+DEFAULT_SESSION_DIALOGUE = SESSION_DIALOGUES.get(
+    (DEFAULT_CLIENT_ID, DEFAULT_SESSION_NAME),
+    DEFAULT_DIALOGUE.copy(),
+)
+
+
 FACTOR_LABELS = {
     "depressive_mood": "우울한 기분",
     "worthlessness": "무가치감",
@@ -187,7 +378,58 @@ class MockKlueBERTClassifier:
             "anxiety": int(any(term in text for term in anxiety_terms)),
             "addiction": int(any(term in text for term in addiction_terms)),
         }
+        
+class KlueBertHFClassifier:
+    """
+    Hugging Face에 업로드된 KlueBERT 회귀 모델 3개를 사용해
+    우울/불안/중독 여부를 판별하는 클래스.
 
+    최종 반환값은 기존 MockKlueBERTClassifier와 동일하게
+    {
+        "depression": 0/1,
+        "anxiety": 0/1,
+        "addiction": 0/1
+    }
+    형식으로 맞춘다.
+    """
+
+    def __init__(self):
+        self.last_result = {
+            "ok": False,
+            "status": "not_run",
+            "message": "KlueBERT 분류가 아직 실행되지 않았습니다.",
+            "backend": "kluebert_hf",
+        }
+
+    def predict(self, script: str) -> Dict[str, int]:
+        try:
+            from src.classifier import classify_text
+
+            result = classify_text(script)
+            self.last_result = result
+
+            return result.get(
+                "classification",
+                {
+                    "depression": 0,
+                    "anxiety": 0,
+                    "addiction": 0,
+                },
+            )
+
+        except Exception as error:
+            self.last_result = {
+                "ok": False,
+                "status": "error",
+                "message": f"KlueBERT 분류 모듈 실행 중 오류가 발생했습니다: {error}",
+                "backend": "kluebert_hf",
+            }
+
+            return {
+                "depression": 0,
+                "anxiety": 0,
+                "addiction": 0,
+            }
 
 class MockFactorExtractor:
     """
@@ -231,6 +473,52 @@ class MockFactorExtractor:
 
         return factors
 
+class GeminiAPIFactorExtractor:
+    """
+    Gemini API 기반 28요인 추출 연결 클래스.
+
+    현재 역할:
+        - src/factor_extractor.py의 extract_factors() 함수를 호출한다.
+        - GEMINI_API_KEY가 없거나 API 호출에 실패해도 앱이 깨지지 않게 한다.
+        - 최종 반환값은 기존 MockFactorExtractor와 동일하게 factors dict만 반환한다.
+    """
+
+    def __init__(self):
+        self.last_result = {
+            "ok": False,
+            "status": "not_run",
+            "message": "Gemini 28요인 추출이 아직 실행되지 않았습니다.",
+            "backend": "gemini_api",
+        }
+
+    def extract(self, script: str, classification: Dict[str, int]) -> Dict[str, int]:
+        try:
+            from src.factor_extractor import extract_factors
+
+            result = extract_factors(
+                script=script,
+                classification=classification,
+                backend="gemini_api",
+            )
+
+            self.last_result = result
+
+            return result.get("factors", {})
+
+        except Exception as error:
+            self.last_result = {
+                "ok": False,
+                "status": "error",
+                "message": f"Gemini 28요인 추출 모듈 실행 중 오류가 발생했습니다: {error}",
+                "backend": "gemini_api",
+            }
+
+            try:
+                from src.factor_extractor import FACTOR_KEYS
+
+                return {key: 0 for key in FACTOR_KEYS}
+            except Exception:
+                return {}
 
 class MockKoalpacaSummarizer:
     """
@@ -275,28 +563,70 @@ class MockKoalpacaSummarizer:
 5. 다음 회기 계획
 다음 회기에서는 수면 양상, 출근 전 불안 상황, 회피 행동, 자기비하적 사고, 현재 대처 방식을 구체적으로 확인한다.
 """
+        
+class KoalpacaAPISummarizer:
+    """
+    KoAlpaca API 요약 모델 연결 클래스.
 
+    현재 역할:
+        - src/summarizer.py의 summarize() 함수를 호출한다.
+        - API가 아직 설정되지 않았거나 실패하면 앱이 깨지지 않도록 안내 문구를 반환한다.
+    """
+
+    def summarize(
+        self,
+        script: str,
+        classification: Dict[str, int],
+        factors: Dict[str, int],
+    ) -> str:
+        try:
+            from src.summarizer import summarize as koalpaca_summarize
+
+            result = koalpaca_summarize(script)
+
+            if result.get("ok"):
+                return result.get("text", "").strip()
+
+            status = result.get("status", "unknown")
+            message = result.get("message", "KoAlpaca API 호출 결과를 확인할 수 없습니다.")
+
+            return f"""[KoAlpaca API 연결 상태: {status}]
+
+{message}
+
+현재 보고서 생성 기능은 KoAlpaca API 연결 자리만 준비된 상태입니다.
+KoAlpaca 호스팅이 완료되면 Streamlit Secrets에 KOALPACA_ENDPOINT_URL과 KOALPACA_API_KEY를 입력한 뒤 다시 실행하세요.
+"""
+
+        except Exception as error:
+            return f"""[KoAlpaca API 연결 오류]
+
+KoAlpaca API 호출 모듈을 실행하는 중 오류가 발생했습니다.
+
+오류 내용:
+{error}
+"""
 
 # =========================================================
 # 5. 모델 로더
 # =========================================================
 def load_classifier_model():
     """
-    분류 모델 로더.
+    우울/불안/중독 분류 모델 로더.
 
-    현재:
-        MockKlueBERTClassifier 사용
+    CLASSIFIER_BACKEND 값에 따라 분류 백엔드를 선택한다.
 
-    3단계에서 교체 예정:
-        AI Hub KlueBERT 실제 모델 코드
+    - mock: 기존 키워드 기반 mock 분류
+    - kluebert_hf: Hugging Face에 업로드된 KlueBERT 회귀 모델 3개 사용
     """
-    if MODEL_BACKEND == "mock":
+    if CLASSIFIER_BACKEND == "mock":
         return MockKlueBERTClassifier()
 
-    if MODEL_BACKEND == "aihub_local":
-        # 3단계에서 실제 KlueBERT 모델 클래스를 연결할 자리
-        # 예:
-        # return AIHubKlueBERTClassifier(model_path=KLUEBERT_MODEL_NAME)
+    if CLASSIFIER_BACKEND == "kluebert_hf":
+        return KlueBertHFClassifier()
+
+    if CLASSIFIER_BACKEND == "aihub_local":
+        # 향후 로컬 모델 직접 로딩 방식이 필요할 경우 사용할 자리
         return MockKlueBERTClassifier()
 
     return MockKlueBERTClassifier()
@@ -306,16 +636,19 @@ def load_factor_model():
     """
     28요인 추출 모델 로더.
 
-    현재:
-        MockFactorExtractor 사용
+    FACTOR_BACKEND 값에 따라 28요인 추출 백엔드를 선택한다.
 
-    추후:
-        Gemini few-shot 또는 별도 28요인 모델 연결
+    - mock: 기존 mock 28요인 추출 사용
+    - gemini_api: src/factor_extractor.py를 통해 Gemini API 호출
     """
-    if MODEL_BACKEND == "mock":
+    if FACTOR_BACKEND == "mock":
         return MockFactorExtractor()
 
-    if MODEL_BACKEND == "aihub_local":
+    if FACTOR_BACKEND == "gemini_api":
+        return GeminiAPIFactorExtractor()
+
+    if FACTOR_BACKEND == "aihub_local":
+        # 향후 AI Hub 기반 28요인 모델을 직접 연결할 때 사용할 자리
         return MockFactorExtractor()
 
     return MockFactorExtractor()
@@ -325,23 +658,22 @@ def load_summarizer_model():
     """
     요약보고서 생성 모델 로더.
 
-    현재:
-        MockKoalpacaSummarizer 사용
+    MODEL_BACKEND 값에 따라 요약 백엔드를 선택한다.
 
-    4단계에서 교체 예정:
-        Koalpaca 4bit 요약 모델 코드
+    - mock: 기존 mock 요약 사용
+    - koalpaca_api: src/summarizer.py를 통해 KoAlpaca API 호출
     """
     if MODEL_BACKEND == "mock":
         return MockKoalpacaSummarizer()
 
+    if MODEL_BACKEND == "koalpaca_api":
+        return KoalpacaAPISummarizer()
+
     if MODEL_BACKEND == "aihub_local":
-        # 4단계에서 실제 Koalpaca 모델 클래스를 연결할 자리
-        # 예:
-        # return AIHubKoalpacaSummarizer(model_path=KOALPACA_MODEL_NAME)
+        # 향후 로컬 KoAlpaca 또는 AI Hub 모델을 직접 로딩할 때 사용할 자리
         return MockKoalpacaSummarizer()
 
     return MockKoalpacaSummarizer()
-
 
 # =========================================================
 # 6. 분석 파이프라인
@@ -406,8 +738,18 @@ def run_analysis(script: str) -> Dict[str, Any]:
         "summary": summary,
         "model_info": {
             "backend": MODEL_BACKEND,
+            "factor_backend": FACTOR_BACKEND,
+            "classifier_backend": CLASSIFIER_BACKEND,
+            "classifier": "KlueBERT HF" if CLASSIFIER_BACKEND == "kluebert_hf" else "MockKlueBERTClassifier",
+            "classifier_status": getattr(classifier, "last_result", {}).get("status", "success" if CLASSIFIER_BACKEND == "mock" else "unknown"),
+            "classifier_message": getattr(classifier, "last_result", {}).get("message", ""),
+            "classifier_scores": getattr(classifier, "last_result", {}).get("scores", {}),
+            "classifier_raw_scores": getattr(classifier, "last_result", {}).get("raw_scores", {}),
             "classifier": KLUEBERT_MODEL_NAME if MODEL_BACKEND != "mock" else "MockKlueBERTClassifier",
-            "summarizer": KOALPACA_MODEL_NAME if MODEL_BACKEND != "mock" else "MockKoalpacaSummarizer",
+            "factor_extractor": "Gemini API" if FACTOR_BACKEND == "gemini_api" else "MockFactorExtractor",
+            "summarizer": "KoAlpaca API" if MODEL_BACKEND == "koalpaca_api" else "MockKoalpacaSummarizer",
+            "factor_status": getattr(factor_model, "last_result", {}).get("status", "success" if FACTOR_BACKEND == "mock" else "unknown"),
+            "factor_message": getattr(factor_model, "last_result", {}).get("message", ""),  
         },
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -511,11 +853,11 @@ def make_json_export(analysis_result: Dict[str, Any]) -> str:
 def init_session_state():
     defaults = {
         "page": "상담내역 기록·추가",
-        "selected_client": "C-001",
-        "selected_session": "3회기",
-        "client_search": "C-001",
+        "selected_client": DEFAULT_CLIENT_ID,
+        "selected_session": DEFAULT_SESSION_NAME,
+        "client_search": DEFAULT_CLIENT_ID,
         "record_mode": "existing",
-        "dialogue_rows": DEFAULT_DIALOGUE.copy(),
+        "dialogue_rows": DEFAULT_SESSION_DIALOGUE.copy(),
         "chat_history": [],
         "analysis_result": None,
     }
@@ -535,11 +877,26 @@ def go_page(page_name: str):
 def select_session(session_name: str):
     st.session_state.selected_session = session_name
     st.session_state.record_mode = "existing"
+    st.session_state.analysis_result = None
+
+    key = (st.session_state.selected_client, session_name)
+
+    if key in SESSION_DIALOGUES:
+        st.session_state.dialogue_rows = SESSION_DIALOGUES[key].copy()
+    else:
+        st.session_state.dialogue_rows = DEFAULT_DIALOGUE.copy()
 
 
 def start_new_session():
     st.session_state.record_mode = "new"
     st.session_state.selected_session = "새 상담"
+    st.session_state.dialogue_rows = pd.DataFrame(
+        {
+            "화자": ["상담사", "내담자"],
+            "발화": ["", ""],
+        }
+    )
+    st.session_state.analysis_result = None
 
 
 def get_client_row():
@@ -792,37 +1149,43 @@ def render_sidebar():
 
         st.divider()
 
-        st.markdown("#### 내담자 선택")
+        st.sidebar.markdown("### 내담자 선택")
 
-        client_keyword = st.text_input(
-            "내담자 검색",
-            value=st.session_state.client_search,
-            placeholder="예: C-001, 김OO, 서울",
-            key="client_search_input",
-        )
+        client_options = CLIENTS["내담자 ID"].tolist()
 
-        st.session_state.client_search = client_keyword
-
-        if client_keyword.strip():
-            keyword = client_keyword.strip().lower()
-            client_view = CLIENTS.copy()
-            mask = client_view.apply(lambda row: keyword in " ".join(row.astype(str)).lower(), axis=1)
-            client_view = client_view[mask]
-
-            if not client_view.empty:
-                selected_client_id = client_view.iloc[0]["내담자 ID"]
-
-                if selected_client_id != st.session_state.selected_client:
-                    st.session_state.selected_client = selected_client_id
-                    client_sessions = SESSIONS[SESSIONS["내담자 ID"] == selected_client_id]
-
-                    if not client_sessions.empty:
-                        st.session_state.selected_session = client_sessions.iloc[-1]["회기"]
-                        st.session_state.record_mode = "existing"
-
-                    st.rerun()
+        if not client_options:
+            st.sidebar.warning("표시할 내담자 데이터가 없습니다.")
+            selected_client_id = st.session_state.selected_client
+        else:
+            if st.session_state.selected_client in client_options:
+                default_index = client_options.index(st.session_state.selected_client)
             else:
-                st.info("검색 결과가 없습니다.")
+                default_index = 0
+
+            selected_client_id = st.selectbox(
+                "내담자",
+                options=client_options,
+                index=default_index,
+            )
+            
+        if selected_client_id != st.session_state.selected_client:
+            st.session_state.selected_client = selected_client_id
+            client_sessions = SESSIONS[SESSIONS["내담자 ID"] == selected_client_id]
+
+            if not client_sessions.empty:
+                selected_session = client_sessions.iloc[0]["회기"]
+                st.session_state.selected_session = selected_session
+                st.session_state.record_mode = "existing"
+
+                key = (selected_client_id, selected_session)
+
+                if key in SESSION_DIALOGUES:
+                    st.session_state.dialogue_rows = SESSION_DIALOGUES[key].copy()
+                else:
+                    st.session_state.dialogue_rows = DEFAULT_DIALOGUE.copy()
+
+            st.session_state.analysis_result = None
+            st.rerun()
 
         st.divider()
 
@@ -905,9 +1268,7 @@ def render_session_cards():
                 c1, c2, c3, c4, c5 = st.columns([0.14, 0.18, 0.34, 0.18, 0.16])
 
                 c1.markdown(f"**{row['회기']}**")
-                c2.write(row["상담일"])
                 c3.write(row["상담 주제"])
-                c4.write(row["보고서 상태"])
 
                 with c5:
                     button_label = "선택됨" if selected else "기록 보기"
@@ -1020,15 +1381,94 @@ def render_dashboard():
         st.info("아직 분석 결과가 없습니다. 먼저 상담내역 기록·추가 화면에서 AI 분석을 실행하세요.")
         return
 
+    backend = result.get("model_info", {}).get("backend", "unknown")
+
+    classifier_backend = result.get("model_info", {}).get("classifier_backend", "mock")
+    classifier_status = result.get("model_info", {}).get("classifier_status", "")
+    classifier_message = result.get("model_info", {}).get("classifier_message", "")
+    classifier_scores = result.get("model_info", {}).get("classifier_scores", {})
+    classifier_raw_scores = result.get("model_info", {}).get("classifier_raw_scores", {})
+    
+    if classifier_backend == "mock":
+        st.warning("현재 우울/불안/중독 판별은 mock 분류 결과입니다. 실제 KlueBERT 모델 결과가 아닙니다.")
+    elif classifier_backend == "kluebert_hf":
+        if classifier_status == "success":
+            st.success("우울/불안/중독 판별 백엔드: KlueBERT HF 연결 성공")
+            if classifier_scores:
+                st.caption(f"KlueBERT 0~3 예측 점수: {classifier_scores}")
+            if classifier_raw_scores:
+                st.caption(f"KlueBERT 회귀 원점수(raw score): {classifier_raw_scores}")
+        else:
+            st.info(f"우울/불안/중독 판별 백엔드: KlueBERT HF / 상태: {classifier_status}")
+            if classifier_message:
+                st.caption(classifier_message)
+
+    if backend == "mock":st.warning("현재 보고서 생성 백엔드는 mock입니다. KoAlpaca API 보고서 결과가 아닙니다.")
+    elif backend == "koalpaca_api":
+        st.info("현재 보고서 생성 백엔드는 KoAlpaca API로 설정되어 있습니다.")
+    else:
+        st.info(f"현재 모델 백엔드: {backend}")
+
+    factor_backend = result.get("model_info", {}).get("factor_backend", "mock")
+    factor_status = result.get("model_info", {}).get("factor_status", "")
+    factor_message = result.get("model_info", {}).get("factor_message", "")
+
+    if factor_backend == "mock":
+        st.warning("현재 28요인 점수는 mock 추출 결과입니다. 실제 Gemini API 결과가 아닙니다.")
+    elif factor_backend == "gemini_api":
+        if factor_status == "success":
+            st.success("28요인 추출 백엔드: Gemini API 연결 성공")
+        else:
+            st.info(f"28요인 추출 백엔드: Gemini API / 상태: {factor_status}")
+            if factor_message:
+                st.caption(factor_message)
+                
+    selected_client_id = st.session_state.selected_client
+    selected_session = st.session_state.selected_session
+
+    current_session_rows = SESSIONS[
+        (SESSIONS["내담자 ID"] == selected_client_id)
+        & (SESSIONS["회기"] == selected_session)
+    ]
+
+    if not current_session_rows.empty:
+        current_session = current_session_rows.iloc[0]
+    else:
+        current_session = None
+    
     classification = result["classification"]
     factors = result["factors"]
     factor_df = build_factor_dataframe(factors)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("우울 관련 라벨", classification.get("depression", 0))
-    c2.metric("불안 관련 라벨", classification.get("anxiety", 0))
-    c3.metric("중독 관련 라벨", classification.get("addiction", 0))
-    c4.metric("분석 백엔드", result["model_info"]["backend"])
+    c1.metric("우울 예측 라벨", classification.get("depression", 0))
+    c2.metric("불안 예측 라벨", classification.get("anxiety", 0))
+    c3.metric("중독 예측 라벨", classification.get("addiction", 0))
+    c4.metric("보고서 백엔드", result["model_info"]["backend"])
+    
+    st.markdown("### 데이터셋 원본 라벨")
+
+    if current_session is not None:
+        label_cols = st.columns(4)
+
+        with label_cols[0]:
+            st.metric("우울 원본 라벨", int(current_session.get("depression", 0)))
+
+        with label_cols[1]:
+            st.metric("불안 원본 라벨", int(current_session.get("anxiety", 0)))
+
+        with label_cols[2]:
+            st.metric("중독 원본 라벨", int(current_session.get("addiction", 0)))
+
+        with label_cols[3]:
+            st.metric("데이터 class", str(current_session.get("class", "미상")))
+
+        st.caption(
+            f"현재 선택 회기: {selected_client_id} / {selected_session} / "
+            f"{current_session.get('split', 'split 미상')} / {current_session.get('filename', 'filename 미상')}"
+        )
+    else:
+        st.info("현재 선택한 회기의 원본 라벨 정보를 찾지 못했습니다.")
 
     st.caption("주의: 위 값은 모델 출력 기반 참고값이며, 임상 진단 또는 표준화 검사 점수로 단정하지 않습니다.")
 
