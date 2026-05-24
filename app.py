@@ -909,8 +909,10 @@ def render_report() -> None:
     gemma_filled = payload.get("gemma_sections_filled", 0)
     source_label = {
         "koalpaca": "KoAlpaca (4/4 섹션 완전 응답)",
-        "koalpaca+gemma": f"KoAlpaca {ka_filled}/4 + Gemma 보강 {gemma_filled}/4",
-        "koalpaca_partial": f"KoAlpaca {ka_filled}/4 (부분 응답, Gemma 보강 실패)",
+        "gemma": (
+            f"Gemma 단독 (KoAlpaca {ka_filled}/4 부분 응답 — "
+            "학습 분포 mismatch로 무시)"
+        ),
         "gemma_fallback": "Gemma 폴백 (KoAlpaca 시도 → 빈 응답)",
         "gemma_only": "Gemma 단독 (KoAlpaca endpoint 미설정/네트워크 실패)",
         "none": "응답 없음",
