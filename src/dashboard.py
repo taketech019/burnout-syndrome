@@ -131,35 +131,13 @@ def session_trend_chart(sessions: list[dict], top_labels: Optional[list[str]] = 
 
 # ── 4) HIRA 인구통계 비교 ─────────────────────────────────────────────────────
 
-# MVP 가드레일: HIRA 실제 API 연동 없이 stub (예시 수치). PRD §F2의 형식만 충족.
-# 정확한 데이터셋 픽 결정 후 hira.py에서 실데이터 fetch 교체.
-_HIRA_STUB = {
-    "depression": {
-        ("20", "M"): {"region": 5.2, "national": 4.1},
-        ("20", "F"): {"region": 7.8, "national": 6.5},
-        ("30", "M"): {"region": 5.5, "national": 4.3},
-        ("30", "F"): {"region": 8.3, "national": 6.1},
-        ("40", "M"): {"region": 5.8, "national": 4.7},
-        ("40", "F"): {"region": 8.1, "national": 6.4},
-    },
-}
-
 
 def hira_comparison_text(patient: dict, primary_disease: str = "depression") -> str:
-    """내담자 메타에 대응하는 HIRA stub 비교 문장. 실제 API 미연동, MVP demo용."""
-    age_bucket = str(int(patient.get("age", 30)) // 10 * 10)
-    gender_code = "F" if patient.get("gender", "").startswith("여") else "M"
-    key = (age_bucket, gender_code)
-    table = _HIRA_STUB.get(primary_disease, {})
-    if key not in table:
-        return f"(HIRA 통계: {patient.get('age', '?')}대 {patient.get('gender', '?')} 데이터 없음 — 실데이터 연동 예정)"
-    d = table[key]
-    region = patient.get("region", "지역")
-    return (
-        f"{age_bucket}대 {patient.get('gender', '?')} {region} {primary_disease} 진료율 "
-        f"**{d['region']}%**, 전국 평균 **{d['national']}%** "
-        f"(MVP stub — 실제 HIRA 데이터 연동 시 갱신 예정)"
-    )
+    """내담자 메타에 대응하는 HIRA 실데이터 비교. src.hira.lookup 사용."""
+    from src.hira import lookup
+
+    result = lookup(patient, primary_disease)
+    return result["summary_text"]
 
 
 # ── PNG 이미지 변환 (보고서 임베드용) ─────────────────────────────────────────

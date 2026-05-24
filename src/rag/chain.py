@@ -1,17 +1,15 @@
-"""src/rag/chain.py — RAG 챗봇 체인 (Ollama Qwen2.5 + ChromaDB + KoSBERT).
+"""src/rag/chain.py — RAG 챗봇 체인.
 
-PRD §F4 요구사항:
-- 로컬 LLM (Ollama Qwen2.5 7B) — 민감 데이터 외부 전송 없음
-- KoSBERT 임베딩
-- ChromaDB k=5
-- 모든 응답에 출처 표시
-- 고지 문구 자동 포함
-
-Ollama가 설치되지 않은 환경에서는 healthcheck()가 명확한 안내 메시지 반환.
+사용자 지시로 LLM은 Gemma 4 31B (Ollama Qwen2.5 대신). 임베딩은 PRD §F4 KoSBERT
+(`snunlp/KR-SBERT-V40K-klueNLI-augSTS`). ChromaDB k=5 검색 + 모든 응답 출처 표시.
 """
-import requests
+import logging
+from typing import Optional
 
-from config import CHROMA_DIR, EMBEDDING_MODEL, OLLAMA_BASE_URL, OLLAMA_MODEL
+from config import CHROMA_DIR, EMBEDDING_MODEL, GEMINI_API_KEY, GEMINI_MODEL
+from src.gemma_client import generate, strip_reasoning
+
+log = logging.getLogger(__name__)
 
 
 DISCLAIMER = (
@@ -19,10 +17,9 @@ DISCLAIMER = (
     "상담 기록 정리와 회기 계획 수립을 보조하는 참고용 도구입니다."
 )
 
-_PROMPT_TEMPLATE = """당신은 한국어 임상심리 보조 챗봇입니다. 아래 컨텍스트만 근거로 답하세요. 컨텍스트에 없으면 "참고 자료에서 찾을 수 없습니다"라고 답하세요.
+_PROMPT_TEMPLATE = """당신은 한국어 임상심리 보조 챗봇입니다. **아래 [참고 자료]만 근거로** 답변하세요. 컨텍스트에 부족하면 "참고 자료에서 찾을 수 없습니다"라고 답하세요.
 
-[고지]
-{disclaimer}
+**중요**: 사고 과정·요약·메타 설명을 절대 출력하지 마세요. 한국어 답변만 직접 작성하세요. 영어·번역·"Role:" 같은 라벨 금지.
 
 [참고 자료]
 {context}
@@ -30,87 +27,85 @@ _PROMPT_TEMPLATE = """당신은 한국어 임상심리 보조 챗봇입니다. �
 [질문]
 {question}
 
-[답변]
-"""
+[한국어 답변]"""
+
+
+_EMBEDDER_CACHE = {"obj": None, "kind": None}
+
+
+def _get_embedder():
+    """KoSBERT 우선, 실패 시 LangChain default 폴백."""
+    if _EMBEDDER_CACHE["obj"] is not None:
+        return _EMBEDDER_CACHE["obj"], _EMBEDDER_CACHE["kind"]
+    try:
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        emb = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+        _EMBEDDER_CACHE.update(obj=emb, kind="kosbert")
+        return emb, "kosbert"
+    except Exception as e:
+        log.warning("KoSBERT 임베딩 로드 실패 (%s) — 폴백 시도", e)
+        from langchain_community.embeddings import FakeEmbeddings  # type: ignore
+        emb = FakeEmbeddings(size=768)
+        _EMBEDDER_CACHE.update(obj=emb, kind="fake")
+        return emb, "fake"
 
 
 def healthcheck() -> dict:
-    """Ollama + ChromaDB 가용성 확인. UI에서 RAG 사용 가능 여부 판단용."""
-    status = {"ollama": False, "chroma": False, "ollama_url": OLLAMA_BASE_URL, "model": OLLAMA_MODEL}
-    try:
-        r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
-        if r.ok:
-            models = [m.get("name", "") for m in r.json().get("models", [])]
-            status["ollama"] = OLLAMA_MODEL in models or any(OLLAMA_MODEL.split(":")[0] in m for m in models)
-            status["available_models"] = models
-    except requests.RequestException:
-        pass
-    status["chroma"] = (CHROMA_DIR / "chroma.sqlite3").exists()
+    """LLM(GEMINI_API_KEY) + ChromaDB 가용성."""
+    status = {
+        "llm": bool(GEMINI_API_KEY),
+        "llm_model": GEMINI_MODEL,
+        "chroma": (CHROMA_DIR / "chroma.sqlite3").exists(),
+        "chroma_path": str(CHROMA_DIR),
+    }
     return status
 
 
-def _retrieve(query: str, k: int = 5) -> list:
-    """ChromaDB에서 KoSBERT 임베딩 기반 k-NN 검색. Document 리스트 반환."""
-    from langchain_community.embeddings import HuggingFaceEmbeddings
+def _retrieve(query: str, k: int = 5):
     from langchain_community.vectorstores import Chroma
 
-    embedder = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+    emb, _ = _get_embedder()
     store = Chroma(
         persist_directory=str(CHROMA_DIR),
-        embedding_function=embedder,
+        embedding_function=emb,
         collection_name="counshelper",
     )
     return store.similarity_search(query, k=k)
 
 
-def _call_ollama(prompt: str, timeout: int = 30) -> str:
-    """Ollama /api/generate 호출. 실패 시 RuntimeError."""
-    resp = requests.post(
-        f"{OLLAMA_BASE_URL}/api/generate",
-        json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-        timeout=timeout,
-    )
-    resp.raise_for_status()
-    return resp.json().get("response", "").strip()
-
-
 def answer_query(query: str, k: int = 5) -> dict:
-    """RAG 응답. 반환: {"answer", "sources", "error"?}.
-
-    Ollama 미설치/미실행 또는 ChromaDB 인덱스 부재 시 명시적 error 메시지로 폴백.
-    """
     status = healthcheck()
-
-    if not status["ollama"]:
+    if not status["llm"]:
         return {
             "answer": "",
             "sources": [],
-            "error": (
-                f"Ollama 미연결 (URL: {OLLAMA_BASE_URL}). "
-                f"`ollama serve` 후 `ollama pull {OLLAMA_MODEL}`로 모델을 받으세요."
-            ),
+            "error": "GEMINI_API_KEY 미설정 — .env 확인 필요.",
         }
-
     if not status["chroma"]:
         return {
             "answer": "",
             "sources": [],
             "error": (
-                "RAG 인덱스 미생성. 학습 데이터를 `data/raw/`에 두고 "
-                "`python -m src.rag.ingest`로 인덱스를 빌드하세요."
+                "RAG 인덱스 미생성. 다음 명령으로 빌드하세요:\n"
+                "```bash\npython -m src.rag.ingest\n```"
             ),
         }
 
     try:
         docs = _retrieve(query, k=k)
+        if not docs:
+            return {"answer": "참고 자료에서 찾을 수 없습니다.", "sources": []}
         context = "\n\n".join(
-            f"[자료 {i+1}] {d.page_content[:500]}\n(출처: {d.metadata.get('source', '?')})"
+            f"[자료 {i+1}] {d.page_content[:600]}\n(출처: {d.metadata.get('source', '?')})"
             for i, d in enumerate(docs)
         )
-        prompt = _PROMPT_TEMPLATE.format(disclaimer=DISCLAIMER, context=context, question=query)
-        answer = _call_ollama(prompt)
+        prompt = _PROMPT_TEMPLATE.format(
+            disclaimer=DISCLAIMER, context=context, question=query
+        )
+        text = generate(prompt, temperature=0.2, max_output_tokens=1024)
+        cleaned = strip_reasoning(text)
         return {
-            "answer": f"{answer}\n\n---\n*{DISCLAIMER}*",
+            "answer": f"{cleaned.strip()}\n\n---\n*{DISCLAIMER}*",
             "sources": [
                 {
                     "source": d.metadata.get("source", "?"),
