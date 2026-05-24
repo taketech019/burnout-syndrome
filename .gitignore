@@ -3,6 +3,8 @@ data/**
 !data/*/
 !data/**/.gitkeep
 chroma_db/
+*.sqlite3
+*.db
 
 # 환경변수
 .env
@@ -21,6 +23,8 @@ venv/
 .venv/
 
 # IDE
+.DS_Store
+Thumbs.db
 .vscode/
 .idea/
 
@@ -44,8 +48,11 @@ streamlit.log
 
 #라벨링데이터
 data/raw/
+
+#secrets/enviroment
 .streamlit/secrets.toml
 .env
+
 # KlueBERT 학습 모델 산출물 (HF Hub로만 배포, 합 ~1.27GB)
 ai-model/kluebert/2.AI학습모델파일/
 ai-model/kluebert/**/trained_model_kluebert_*/
@@ -54,3 +61,6 @@ hf-upload/
 # HF Space 로컬 작업 디렉토리 (Space repo는 별도 git 원격)
 hf-space/
 hf-space-remote/
+
+data/processed/*
+!data/processed/.gitkeep

@@ -4,6 +4,7 @@
 # =========================================================
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
@@ -379,18 +380,16 @@ class MockKlueBERTClassifier:
             "addiction": int(any(term in text for term in addiction_terms)),
         }
         
-class KlueBertHFClassifier:
+class KlueBertAPIClassifier:
     """
-    Hugging Face에 업로드된 KlueBERT 회귀 모델 3개를 사용해
-    우울/불안/중독 여부를 판별하는 클래스.
+    외부 KlueBERT API를 호출해 우울/불안/중독 여부를 판별하는 클래스.
 
-    최종 반환값은 기존 MockKlueBERTClassifier와 동일하게
+    최종 반환값:
     {
         "depression": 0/1,
         "anxiety": 0/1,
         "addiction": 0/1
     }
-    형식으로 맞춘다.
     """
 
     def __init__(self):
@@ -398,7 +397,7 @@ class KlueBertHFClassifier:
             "ok": False,
             "status": "not_run",
             "message": "KlueBERT 분류가 아직 실행되지 않았습니다.",
-            "backend": "kluebert_hf",
+            "backend": "kluebert_api",
         }
 
     def predict(self, script: str) -> Dict[str, int]:
@@ -422,7 +421,7 @@ class KlueBertHFClassifier:
                 "ok": False,
                 "status": "error",
                 "message": f"KlueBERT 분류 모듈 실행 중 오류가 발생했습니다: {error}",
-                "backend": "kluebert_hf",
+                "backend": "kluebert_api",
             }
 
             return {
@@ -617,17 +616,13 @@ def load_classifier_model():
     CLASSIFIER_BACKEND 값에 따라 분류 백엔드를 선택한다.
 
     - mock: 기존 키워드 기반 mock 분류
-    - kluebert_hf: Hugging Face에 업로드된 KlueBERT 회귀 모델 3개 사용
+    - kluebert_api: 외부 KlueBERT API 호출
     """
     if CLASSIFIER_BACKEND == "mock":
         return MockKlueBERTClassifier()
 
-    if CLASSIFIER_BACKEND == "kluebert_hf":
-        return KlueBertHFClassifier()
-
-    if CLASSIFIER_BACKEND == "aihub_local":
-        # 향후 로컬 모델 직접 로딩 방식이 필요할 경우 사용할 자리
-        return MockKlueBERTClassifier()
+    if CLASSIFIER_BACKEND == "kluebert_api":
+        return KlueBertAPIClassifier()
 
     return MockKlueBERTClassifier()
 
@@ -740,7 +735,7 @@ def run_analysis(script: str) -> Dict[str, Any]:
             "backend": MODEL_BACKEND,
             "factor_backend": FACTOR_BACKEND,
             "classifier_backend": CLASSIFIER_BACKEND,
-            "classifier": "KlueBERT HF" if CLASSIFIER_BACKEND == "kluebert_hf" else "MockKlueBERTClassifier",
+            "classifier": "KlueBERT API" if CLASSIFIER_BACKEND == "kluebert_api" else "MockKlueBERTClassifier",
             "classifier_status": getattr(classifier, "last_result", {}).get("status", "success" if CLASSIFIER_BACKEND == "mock" else "unknown"),
             "classifier_message": getattr(classifier, "last_result", {}).get("message", ""),
             "classifier_scores": getattr(classifier, "last_result", {}).get("scores", {}),
@@ -1143,8 +1138,9 @@ def render_sidebar():
         st.caption("상담 기록 분석 & 보고서 자동화")
 
         st.info(
-            f"현재 모델 백엔드: `{MODEL_BACKEND}`\n\n"
-            "현재 단계에서는 mock 모델로 동작합니다."
+            f"보고서 백엔드: `{MODEL_BACKEND}`\n\n"
+            f"분류 백엔드: `{CLASSIFIER_BACKEND}`\n\n"
+            f"28요인 백엔드: `{FACTOR_BACKEND}`"
         )
 
         st.divider()
@@ -1252,8 +1248,13 @@ def render_session_cards():
     )
 
     client_sessions = SESSIONS[SESSIONS["내담자 ID"] == st.session_state.selected_client].copy()
-    client_sessions["_date"] = pd.to_datetime(client_sessions["상담일"], errors="coerce")
-    client_sessions = client_sessions.sort_values("_date", ascending=False).drop(columns=["_date"])
+
+    def _session_order(value: Any) -> int:
+        match = re.search(r"(\d+)", str(value or ""))
+        return int(match.group(1)) if match else 999
+
+    client_sessions["_session_order"] = client_sessions["회기"].apply(_session_order)
+    client_sessions = client_sessions.sort_values("_session_order", ascending=True).drop(columns=["_session_order"])
 
     if client_sessions.empty:
         st.info("기존 상담 내역이 없습니다. 새 상담 내역을 추가해 주세요.")
@@ -1389,19 +1390,20 @@ def render_dashboard():
     
     if classifier_backend == "mock":
         st.warning("현재 우울/불안/중독 판별은 mock 분류 결과입니다. 실제 KlueBERT 모델 결과가 아닙니다.")
-    elif classifier_backend == "kluebert_hf":
+    elif classifier_backend == "kluebert_api":
         if classifier_status == "success":
-            st.success("우울/불안/중독 판별 백엔드: KlueBERT HF 연결 성공")
+            st.success("우울/불안/중독 판별 백엔드: KlueBERT API 연결 성공")
             if classifier_scores:
                 st.caption(f"KlueBERT 0~3 예측 점수: {classifier_scores}")
             if classifier_raw_scores:
                 st.caption(f"KlueBERT 회귀 원점수(raw score): {classifier_raw_scores}")
         else:
-            st.info(f"우울/불안/중독 판별 백엔드: KlueBERT HF / 상태: {classifier_status}")
+            st.info(f"우울/불안/중독 판별 백엔드: KlueBERT API / 상태: {classifier_status}")
             if classifier_message:
                 st.caption(classifier_message)
 
-    if backend == "mock":st.warning("현재 보고서 생성 백엔드는 mock입니다. KoAlpaca API 보고서 결과가 아닙니다.")
+    if backend == "mock":
+        st.warning("현재 보고서 생성 백엔드는 mock입니다. KoAlpaca API 보고서 결과가 아닙니다.")
     elif backend == "koalpaca_api":
         st.info("현재 보고서 생성 백엔드는 KoAlpaca API로 설정되어 있습니다.")
     else:
@@ -1439,9 +1441,9 @@ def render_dashboard():
     factor_df = build_factor_dataframe(factors)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("우울 예측 라벨", classification.get("depression", 0))
-    c2.metric("불안 예측 라벨", classification.get("anxiety", 0))
-    c3.metric("중독 예측 라벨", classification.get("addiction", 0))
+    c1.metric("우울 0~3점", classification.get("depression", 0))
+    c2.metric("불안 0~3점", classification.get("anxiety", 0))
+    c3.metric("중독 0~3점", classification.get("addiction", 0))
     c4.metric("보고서 백엔드", result["model_info"]["backend"])
     
     st.markdown("### 데이터셋 원본 라벨")
@@ -1530,7 +1532,7 @@ def render_dashboard():
 def render_report():
     st.markdown('<div class="section-title">AI 보고서</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-desc">Koalpaca 요약 모델이 들어갈 위치입니다. 현재는 mock 요약 결과를 표시합니다.</div>',
+        '<div class="page-desc">KoAlpaca 요약 모델이 들어갈 위치입니다. 현재는 선택한 보고서 백엔드 결과를 표시합니다.</div>',
         unsafe_allow_html=True,
     )
     
