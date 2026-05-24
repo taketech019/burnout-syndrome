@@ -54,6 +54,7 @@ def _empty_result(message: str, ok: bool = False) -> dict:
         "status": "error" if not ok else "success",
         "message": message,
         "text": "",
+        "brief": "",
         "sections": dict(_EMPTY_SECTIONS),
         "source": "none",
     }
@@ -129,11 +130,13 @@ def _try_koalpaca(transcript: str) -> Optional[dict]:
         resp.raise_for_status()
         raw = resp.json().get("text", "")
         sections = _parse_sections(raw)
+        brief = _gen_brief(transcript)
         return {
             "ok": True,
             "status": "success",
             "message": "KoAlpaca Modal 응답",
             "text": _sections_to_text(sections),
+            "brief": brief,
             "sections": sections,
             "source": "koalpaca",
         }
@@ -168,17 +171,40 @@ _GEMMA_PROMPT = """당신은 임상심리 전문가입니다. 다음 상담 회�
 """
 
 
+_GEMMA_BRIEF_PROMPT = """다음 상담 회기를 한국어 **한 문단(2~4문장)** 으로 요약합니다.
+영어·메타 라벨·코드블록·헤더·불릿 금지. 자연스러운 한국어 본문만 출력.
+
+상담 텍스트:
+{text}
+"""
+
+
+def _gen_brief(transcript: str) -> str:
+    """Gemma 1단락 요약 — 보고서 페이지 "요약본" textarea용."""
+    try:
+        text = generate(
+            _GEMMA_BRIEF_PROMPT.replace("{text}", transcript[:_MAX_INPUT_CHARS]),
+            temperature=0.2, max_output_tokens=512,
+        )
+        return strip_reasoning(text).strip()
+    except Exception as e:
+        log.warning("brief 생성 실패: %s", e)
+        return ""
+
+
 def _try_gemma_fallback(transcript: str) -> dict:
     try:
         text = generate(_GEMMA_PROMPT.replace("{text}", transcript),
                         temperature=0.2, max_output_tokens=2048)
         cleaned = strip_reasoning(text)
         sections = _parse_sections(cleaned)
+        brief = _gen_brief(transcript)
         return {
             "ok": True,
             "status": "fallback",
             "message": "Gemma 4 31B 폴백 (KoAlpaca skip)",
             "text": _sections_to_text(sections),
+            "brief": brief,
             "sections": sections,
             "source": "gemma_fallback",
         }
