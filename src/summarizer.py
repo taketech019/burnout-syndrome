@@ -57,6 +57,9 @@ def _empty_result(message: str, ok: bool = False) -> dict:
         "brief": "",
         "sections": dict(_EMPTY_SECTIONS),
         "source": "none",
+        "koalpaca_attempted": False,
+        "koalpaca_sections_filled": 0,
+        "gemma_sections_filled": 0,
     }
 
 
@@ -208,7 +211,8 @@ def _gen_brief(transcript: str) -> str:
 
 def _try_gemma_fallback(transcript: str) -> dict:
     try:
-        text = generate(_GEMMA_PROMPT.replace("{text}", transcript),
+        capped = transcript[:_MAX_INPUT_CHARS]
+        text = generate(_GEMMA_PROMPT.replace("{text}", capped),
                         temperature=0.2, max_output_tokens=2048)
         cleaned = strip_reasoning(text)
         sections = _parse_sections(cleaned)

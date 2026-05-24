@@ -134,7 +134,7 @@ def generate_json(prompt: str, **kwargs) -> Optional[Any]:
 
 _REASONING_BULLET = re.compile(r"^\s*\*\s+[A-Za-z][A-Za-z\s]+\d*\s*:.*$", re.MULTILINE)
 _CONSTRAINT_LINE = re.compile(
-    r"^[\s\*#>•\-]*\**(?:Final\s+Answer|Role|Constraint|Goal|Input|Output|Task|Step|Note|Plan|Reasoning|Format|Draft|Material|Question|Answer|Context|Source|Reference|Analysis|Approach|Strategy|Summary|Synthesis|Final|Outline|Thought)\**[\s\d]*[:.].*$",
+    r"^[\s\*#>•\-]*\**(?:Final\s+Answer|Draft\s+\d+\s*\([^)]*\)|Draft\s+\d+|Role|Constraint|Goal|Input|Output|Task|Step|Note|Plan|Reasoning|Format|Draft|Material|Question|Answer|Context|Source|Reference|Analysis|Approach|Strategy|Summary|Synthesis|Final|Outline|Thought)\**[\s\d]*[:.].*$",
     re.MULTILINE,
 )
 
