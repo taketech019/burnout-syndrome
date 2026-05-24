@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
     session_date TEXT,
+    session_no TEXT,
+    scope TEXT,
+    topic TEXT,
     transcript TEXT,
     created_at TEXT NOT NULL
 );
@@ -66,6 +69,12 @@ CREATE INDEX IF NOT EXISTS idx_analyses_session ON analyses(session_id, stage);
 def init_db() -> None:
     with _conn() as c:
         c.executescript(_SCHEMA)
+        # 기존 DB에 새 컬럼 보충 (이미 있으면 OperationalError skip — 멱등)
+        for col in ("session_no", "scope", "topic"):
+            try:
+                c.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass
 
 
 def _now() -> str:
@@ -118,14 +127,21 @@ def delete_patient(patient_id: str) -> bool:
 # ── sessions ───────────────────────────────────────────────────────────────────
 
 
-def add_session(patient_id: str, session_date: str, transcript: str) -> dict:
+def add_session(
+    patient_id: str,
+    session_date: str,
+    transcript: str,
+    session_no: Optional[str] = None,
+    scope: Optional[str] = None,
+    topic: Optional[str] = None,
+) -> dict:
     sid = _new_id()
     now = _now()
     with _conn() as c:
         c.execute(
-            "INSERT INTO sessions(id, patient_id, session_date, transcript, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (sid, patient_id, session_date, transcript, now),
+            "INSERT INTO sessions(id, patient_id, session_date, session_no, scope, topic, transcript, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (sid, patient_id, session_date, session_no, scope, topic, transcript, now),
         )
     return get_session(sid)
 

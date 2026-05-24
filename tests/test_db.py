@@ -62,3 +62,26 @@ def test_get_latest_analysis(temp_db):
     temp_db.add_analysis(s["id"], stage="summary", backend="gemma_fallback", payload={"text": "new"})
     latest = temp_db.get_latest_analysis(s["id"], stage="summary")
     assert latest["payload"]["text"] == "new"
+
+
+def test_session_with_metadata(temp_db):
+    """session_no, scope, topic 컬럼이 저장·조회 가능."""
+    p = temp_db.add_patient(alias="P10", gender="여성", age=30, region="서울")
+    s = temp_db.add_session(
+        p["id"], "2026-05-20", "transcript",
+        session_no="3회기", scope="우울/불안", topic="업무 스트레스",
+    )
+    got = temp_db.get_session(s["id"])
+    assert got["session_no"] == "3회기"
+    assert got["scope"] == "우울/불안"
+    assert got["topic"] == "업무 스트레스"
+
+
+def test_session_metadata_optional(temp_db):
+    """메타 미입력 시 NULL 허용."""
+    p = temp_db.add_patient(alias="P11", gender="남성", age=40, region="부산")
+    s = temp_db.add_session(p["id"], "2026-05-20", "transcript")
+    got = temp_db.get_session(s["id"])
+    assert got["session_no"] is None
+    assert got["scope"] is None
+    assert got["topic"] is None
