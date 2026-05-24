@@ -39,3 +39,6 @@ KOALPACA_API_KEY = os.getenv("KOALPACA_API_KEY", "")
 KLUEBERT_ENDPOINT_URL = os.getenv("KLUEBERT_ENDPOINT_URL", "")
 KLUEBERT_API_KEY = os.getenv("KLUEBERT_API_KEY", "")
 KLUEBERT_LOCAL_DIR = ROOT_DIR / "ai-model" / "kluebert" / "2.AI학습모델파일"
+
+# SQLite DB (단일 파일, 임베디드 — 외부 SQL DB 금지 정신과 일치)
+DB_PATH = DATA_DIR / "counshelper.db"
