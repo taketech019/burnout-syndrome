@@ -1,236 +1,433 @@
-"""src/factor_extractor.py — F1 2단계: 발화별 4범주 0/1 라벨링 + 회기 빈도 집계.
+"""src/factor_extractor.py
 
-PRD §F1 stage 2: 양성 판별된 회기에 대해 발화 단위로 4범주 라벨링.
-- 증상요인 28 (우울 10 / 불안 8 / 중독 10) — primary_disease 따라 1개 세트만 사용
-- 위험요인 20 (공통)
-- 개선요인 5 (공통)
-- 개입요인 11 (공통)
+28요인 추출 전용 모듈.
 
-모델: Gemma 4 31B (사용자 지시). Gemma는 `response_mime_type` 미지원이라
-프롬프트 + 응답에서 JSON 추출 (gemma_client.generate_json).
+현재 목적:
+- 기존 app.py 내부 MockFactorExtractor를 나중에 이 파일로 옮기기 위한 준비.
+- Gemini API 기반 28요인 추출 자리를 만들어둔다.
+- GEMINI_API_KEY가 없으면 앱이 깨지지 않고 not_configured 상태를 반환한다.
+- Gemini 응답은 반드시 28요인 JSON으로 파싱하는 구조를 목표로 한다.
+
+주의:
+- 실제 Gemini API 키는 GitHub 코드에 쓰지 않는다.
+- Streamlit Cloud에서는 st.secrets 또는 환경변수에서 값을 읽는다.
 """
+
+from __future__ import annotations
+
+import json
+import os
 import re
+from typing import Dict, Any
 
-from src.gemma_client import generate_json
+import requests
 
-# ── 라벨 정의 (AI Hub 데이터셋 명세서 미공개 — 임상적으로 합리적인 구성) ────
 
-SYMPTOM_LABELS = {
-    "depression": [
-        "우울감", "불면 또는 과수면", "식욕 또는 체중 변화",
-        "무가치감 또는 죄책감", "자살 사고", "집중력 저하",
-        "흥미 상실", "피로감", "정신운동 지체 또는 초조",
-        "절망감",
-    ],
-    "anxiety": [
-        "안절부절못함", "과도한 걱정", "공황 발작",
-        "회피 행동", "신체 증상(심계항진/발한)",
-        "수면 장애", "집중 곤란", "근육 긴장",
-    ],
-    "addiction": [
-        "갈망", "내성 증가", "금단 증상",
-        "통제력 상실", "사회 기능 손상", "위험 사용",
-        "부정 및 합리화", "재발", "동반 우울/불안",
-        "가족 또는 직장 갈등",
-    ],
-}
-
-RISK_LABELS = [
-    "가족력 정신질환", "과거 정신과 입원력", "자해/자살 시도력",
-    "알코올/약물 남용", "외상 또는 학대 경험", "사회적 고립",
-    "경제적 어려움", "직장 또는 학업 문제", "만성 신체질환",
-    "최근 상실 경험", "양육 스트레스", "가족 갈등",
-    "만성 통증", "수면 박탈", "만성 스트레스 노출",
-    "약물 부작용 또는 의존", "폭력 노출", "신체적 학대 경험",
-    "자존감 저하", "부정적 사고 패턴",
-]
-
-IMPROVEMENT_LABELS = [
-    "사회적 지지 활용", "자기 인식 향상", "대처 기술 습득",
-    "약물 순응 또는 치료 지속", "일상 활동 회복",
-]
-
-INTERVENTION_LABELS = [
-    "인지 재구조화", "행동 활성화", "노출 치료",
-    "이완 훈련", "마음챙김", "문제 해결 훈련",
-    "자살 예방 계약", "가족 상담 권유", "약물 치료 의뢰",
-    "위기 자원 안내", "다음 회기 과제 부여",
+FACTOR_KEYS = [
+    "depressive_mood",
+    "worthlessness",
+    "guilt",
+    "impaired_cognition",
+    "suicidal",
+    "anhedonia",
+    "psychomotor_changes",
+    "weight_appetite",
+    "sleep_disturbance",
+    "fatigue",
+    "anxiety",
+    "loss_of_control",
+    "social_avoidance",
+    "physical_symptom",
+    "craving",
+    "withdrawal",
+    "tolerance",
+    "social_problem",
+    "sympathy_support",
+    "clarification_reflection",
+    "cognitive_restructuring",
+    "information_provision",
+    "goal_setting",
+    "task_assignment",
+    "behavioral_intervention",
+    "coping_skill_training",
+    "structuring",
+    "motivation_for_change",
 ]
 
 
-def get_all_labels(primary_disease: str) -> dict[str, list[str]]:
-    if primary_disease not in SYMPTOM_LABELS:
-        primary_disease = "depression"
+def _get_secret(key: str, default: str = "") -> str:
+    """
+    Streamlit Cloud에서는 st.secrets를 우선 사용하고,
+    로컬 실행에서는 환경변수를 사용한다.
+    """
+    try:
+        import streamlit as st
+
+        if key in st.secrets:
+            return str(st.secrets[key])
+    except Exception:
+        pass
+
+    return os.getenv(key, default)
+
+
+def get_gemini_config() -> Dict[str, str]:
+    """
+    Gemini API 연결 설정을 반환한다.
+    """
     return {
-        "symptom_factor": SYMPTOM_LABELS[primary_disease],
-        "risk_factor": RISK_LABELS,
-        "improvement_factor": IMPROVEMENT_LABELS,
-        "intervention_factor": INTERVENTION_LABELS,
+        "api_key": _get_secret("GEMINI_API_KEY", "").strip(),
+        "model": _get_secret("GEMINI_MODEL", "gemini-2.5-flash").strip(),
     }
 
 
-# ── 발화 분리 ──────────────────────────────────────────────────────────────────
-
-_UTTERANCE_LINE = re.compile(r"^\s*([가-힣A-Za-z]+)\s*[:：\t]\s*(.+?)\s*$", re.MULTILINE)
-
-
-def parse_utterances(text: str) -> list[dict]:
-    """발화자/텍스트 한 줄씩 추출. `상담사: ...` / `내담자: ...` 양식 모두 허용."""
-    out = []
-    for m in _UTTERANCE_LINE.finditer(text):
-        speaker, content = m.group(1).strip(), m.group(2).strip()
-        if content:
-            out.append({"speaker": speaker, "text": content})
-    return out
+def is_gemini_configured() -> bool:
+    """
+    Gemini API Key가 설정되어 있는지 확인한다.
+    """
+    return bool(get_gemini_config()["api_key"])
 
 
-# ── 프롬프트 ──────────────────────────────────────────────────────────────────
-
-_PROMPT_TEMPLATE = """당신은 임상심리 전문가입니다. 다음 상담 회기의 각 발화에 대해 4범주 라벨을 0/1로 분류합니다.
-
-**라벨 정의 (총 {n_total}개)**
-- 증상요인 ({n_symptom}개, {disease}): {symptom_labels}
-- 위험요인 ({n_risk}개): {risk_labels}
-- 개선요인 ({n_improvement}개): {improvement_labels}
-- 개입요인 ({n_intervention}개): {intervention_labels}
-
-**분류 원칙**
-- 각 발화에 해당 라벨이 명확히 드러나면 1, 아니면 0.
-- 발화 자체 내용 + 직전·직후 1~2개 발화의 맥락으로 판단.
-- 상담사 발화에서 "개입요인"이, 내담자 발화에서 "증상/위험/개선요인"이 주로 등장.
-- 불확실하면 0.
-
-**출력 형식** (코드 블록·설명 절대 금지, 순수 JSON만, 발화 순서 유지):
-{{"utterances": [
-  {{"idx": 0, "symptom_factor": [0,1,0,...], "risk_factor": [0,0,1,...],
-    "improvement_factor": [0,...], "intervention_factor": [0,...]}},
-  ...
-]}}
-
-각 배열의 길이는 위에 명시된 라벨 개수와 정확히 일치해야 합니다.
-
-**분석할 발화 목록** ({n_utterances}개):
-{utterances_text}
-"""
+def _empty_factor_scores() -> Dict[str, int]:
+    """
+    모든 28요인을 0으로 초기화한다.
+    """
+    return {key: 0 for key in FACTOR_KEYS}
 
 
-def _format_utterances(utterances: list[dict]) -> str:
-    lines = []
-    for i, u in enumerate(utterances):
-        lines.append(f"[{i}] {u['speaker']}: {u['text']}")
-    return "\n".join(lines)
+def extract_factors_mock(script: str, classification: Dict[str, int] | None = None) -> Dict[str, Any]:
+    """
+    기존 app.py의 MockFactorExtractor와 같은 역할을 하는 mock 함수.
 
+    반환 형식은 Gemini 결과와 동일하게 맞춘다.
+    """
+    text = script.lower()
 
-def _build_prompt(utterances: list[dict], primary_disease: str) -> str:
-    labels = get_all_labels(primary_disease)
-    return _PROMPT_TEMPLATE.format(
-        n_total=sum(len(v) for v in labels.values()),
-        n_symptom=len(labels["symptom_factor"]),
-        disease=primary_disease,
-        symptom_labels=labels["symptom_factor"],
-        n_risk=len(labels["risk_factor"]),
-        risk_labels=labels["risk_factor"],
-        n_improvement=len(labels["improvement_factor"]),
-        improvement_labels=labels["improvement_factor"],
-        n_intervention=len(labels["intervention_factor"]),
-        intervention_labels=labels["intervention_factor"],
-        n_utterances=len(utterances),
-        utterances_text=_format_utterances(utterances),
+    factors = _empty_factor_scores()
+
+    factors.update(
+        {
+            "depressive_mood": 2 if "우울" in text or "아무것도 하기 싫" in text else 0,
+            "worthlessness": 2 if "일을 잘 못" in text or "내가 문제" in text else 0,
+            "guilt": 0,
+            "impaired_cognition": 2 if "집중" in text else 0,
+            "suicidal": 1 if "죽고" in text or "자살" in text or "사라지고" in text else 0,
+            "anhedonia": 2 if "아무것도 하기 싫" in text or "흥미" in text else 0,
+            "psychomotor_changes": 0,
+            "weight_appetite": 0,
+            "sleep_disturbance": 3 if "잠" in text or "수면" in text else 0,
+            "fatigue": 3 if "피곤" in text or "힘들" in text else 0,
+            "anxiety": 3 if "불안" in text or "가슴이 답답" in text else 0,
+            "loss_of_control": 1 if "통제" in text else 0,
+            "social_avoidance": 2 if "피하게" in text or "만나는 것도" in text else 0,
+            "physical_symptom": 2 if "가슴이 답답" in text or "두근" in text else 0,
+            "craving": 2 if "술 생각" in text or "하고 싶어" in text else 0,
+            "withdrawal": 0,
+            "tolerance": 0,
+            "social_problem": 1 if "회사" in text or "사람" in text else 0,
+            "sympathy_support": 2,
+            "clarification_reflection": 1,
+            "cognitive_restructuring": 1,
+            "information_provision": 0,
+            "goal_setting": 1,
+            "task_assignment": 0,
+            "behavioral_intervention": 1,
+            "coping_skill_training": 1,
+            "structuring": 1,
+            "motivation_for_change": 1,
+        }
     )
 
-
-# ── 빈도 집계 ──────────────────────────────────────────────────────────────────
-
-
-def _normalize_label_lists(u: dict, labels: dict[str, list[str]]) -> dict:
-    """모델 라벨 배열을 카테고리별 정확한 길이로 보정 (부족하면 0 패딩, 길면 절단)."""
-    out = {}
-    for cat, names in labels.items():
-        arr = u.get(cat, [])
-        if not isinstance(arr, list):
-            arr = []
-        arr = [1 if (isinstance(v, (int, float)) and v >= 1) or v is True else 0 for v in arr]
-        if len(arr) < len(names):
-            arr += [0] * (len(names) - len(arr))
-        elif len(arr) > len(names):
-            arr = arr[: len(names)]
-        out[cat] = arr
-    return out
-
-
-def _aggregate(utterance_labels: list[dict], primary_disease: str) -> dict:
-    labels = get_all_labels(primary_disease)
-    n_utt = max(len(utterance_labels), 1)
-    freq = {}
-    for category, names in labels.items():
-        cat_freq = []
-        for j, name in enumerate(names):
-            count = sum(
-                1 for u in utterance_labels if u.get(category, [0] * len(names))[j] == 1
-            )
-            cat_freq.append({"label": name, "count": count, "ratio": round(count / n_utt, 3)})
-        freq[category] = cat_freq
-    return freq
-
-
-# ── 공개 진입점 ────────────────────────────────────────────────────────────────
-
-
-def extract_factors(transcript: str, primary_disease: str = "depression") -> dict:
-    """발화 단위 28+20+5+11 분류 + 회기 빈도 집계."""
-    utterances = parse_utterances(transcript)
-    if not utterances:
-        return {
-            "primary_disease": primary_disease,
-            "error": "발화 추출 실패. '상담사: ... / 내담자: ...' 형식 필요.",
-            "utterance_count": 0,
-            "utterances": [],
-            "frequency": _aggregate([], primary_disease),
-        }
-
-    prompt = _build_prompt(utterances, primary_disease)
-    try:
-        data = generate_json(prompt, temperature=0.0, max_output_tokens=8192)
-    except Exception as e:
-        return {
-            "primary_disease": primary_disease,
-            "error": f"Gemma 호출 실패: {e}",
-            "utterance_count": len(utterances),
-            "utterances": utterances,
-            "frequency": _aggregate([], primary_disease),
-        }
-
-    if not isinstance(data, dict) or "utterances" not in data:
-        return {
-            "primary_disease": primary_disease,
-            "error": "Gemma JSON 파싱 실패 또는 utterances 키 부재",
-            "raw": str(data)[:500] if data else "",
-            "utterance_count": len(utterances),
-            "utterances": utterances,
-            "frequency": _aggregate([], primary_disease),
-        }
-
-    labels = get_all_labels(primary_disease)
-    utt_results = []
-    for i, u in enumerate(utterances):
-        match = None
-        for r in data["utterances"]:
-            if isinstance(r, dict) and r.get("idx") == i:
-                match = r
-                break
-        if match is None and i < len(data["utterances"]):
-            match = data["utterances"][i] if isinstance(data["utterances"][i], dict) else {}
-        normalized = _normalize_label_lists(match or {}, labels)
-        utt_results.append({
-            "idx": i,
-            "speaker": u["speaker"],
-            "text": u["text"],
-            **normalized,
-        })
-
     return {
-        "primary_disease": primary_disease,
-        "utterance_count": len(utt_results),
-        "utterances": utt_results,
-        "frequency": _aggregate(utt_results, primary_disease),
+        "ok": True,
+        "status": "success",
+        "message": "mock 28요인 추출 성공",
+        "factors": factors,
+        "backend": "mock",
     }
+
+
+def _build_gemini_prompt(script: str, classification: Dict[str, int] | None = None) -> str:
+    """
+    Gemini few-shot 28요인 추출용 프롬프트를 만든다.
+
+    핵심 원칙:
+    - 진단하지 않는다.
+    - 상담 발화에 근거해서만 점수화한다.
+    - 각 요인은 0, 1, 2, 3 중 하나로만 출력한다.
+    - JSON 외 텍스트를 출력하지 않게 지시한다.
+    """
+    classification = classification or {}
+
+    return f"""
+너는 심리상담 기록을 분석하는 보조 AI이다.
+다음 상담 텍스트를 읽고 28개 요인을 0~3점으로 평가하라.
+
+중요 원칙:
+- 임상 진단을 확정하지 마라.
+- 상담 텍스트에 직접 근거가 있는 내용만 반영하라.
+- 점수는 반드시 0, 1, 2, 3 중 하나여야 한다.
+- 출력은 JSON 객체만 반환하라.
+- 설명 문장, 마크다운, 코드블록은 출력하지 마라.
+
+점수 기준:
+0 = 해당 근거 없음
+1 = 약하게 언급됨
+2 = 비교적 뚜렷하게 나타남
+3 = 강하게 또는 반복적으로 나타남
+
+분류 참고값:
+{json.dumps(classification, ensure_ascii=False)}
+
+반드시 아래 key를 모두 포함하라:
+{json.dumps(FACTOR_KEYS, ensure_ascii=False)}
+
+예시 1:
+입력: "요즘 잠을 잘 못 자고 계속 피곤해요."
+출력:
+{{
+  "depressive_mood": 0,
+  "worthlessness": 0,
+  "guilt": 0,
+  "impaired_cognition": 0,
+  "suicidal": 0,
+  "anhedonia": 0,
+  "psychomotor_changes": 0,
+  "weight_appetite": 0,
+  "sleep_disturbance": 3,
+  "fatigue": 2,
+  "anxiety": 0,
+  "loss_of_control": 0,
+  "social_avoidance": 0,
+  "physical_symptom": 0,
+  "craving": 0,
+  "withdrawal": 0,
+  "tolerance": 0,
+  "social_problem": 0,
+  "sympathy_support": 0,
+  "clarification_reflection": 0,
+  "cognitive_restructuring": 0,
+  "information_provision": 0,
+  "goal_setting": 0,
+  "task_assignment": 0,
+  "behavioral_intervention": 0,
+  "coping_skill_training": 0,
+  "structuring": 0,
+  "motivation_for_change": 0
+}}
+
+예시 2:
+입력: "상담사가 내담자의 감정을 반영하고 다음 주 목표를 함께 정했다."
+출력:
+{{
+  "depressive_mood": 0,
+  "worthlessness": 0,
+  "guilt": 0,
+  "impaired_cognition": 0,
+  "suicidal": 0,
+  "anhedonia": 0,
+  "psychomotor_changes": 0,
+  "weight_appetite": 0,
+  "sleep_disturbance": 0,
+  "fatigue": 0,
+  "anxiety": 0,
+  "loss_of_control": 0,
+  "social_avoidance": 0,
+  "physical_symptom": 0,
+  "craving": 0,
+  "withdrawal": 0,
+  "tolerance": 0,
+  "social_problem": 0,
+  "sympathy_support": 2,
+  "clarification_reflection": 2,
+  "cognitive_restructuring": 0,
+  "information_provision": 0,
+  "goal_setting": 2,
+  "task_assignment": 0,
+  "behavioral_intervention": 0,
+  "coping_skill_training": 0,
+  "structuring": 1,
+  "motivation_for_change": 1
+}}
+
+분석할 상담 텍스트:
+{script}
+
+JSON 출력:
+""".strip()
+
+
+def _extract_json_object(text: str) -> Dict[str, Any]:
+    """
+    Gemini 응답에서 JSON 객체만 추출한다.
+    모델이 실수로 ```json 코드블록을 붙여도 최대한 복구한다.
+    """
+    cleaned = text.strip()
+
+    cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if not match:
+        raise ValueError("Gemini 응답에서 JSON 객체를 찾지 못했습니다.")
+
+    return json.loads(match.group(0))
+
+
+def _normalize_factor_scores(raw_scores: Dict[str, Any]) -> Dict[str, int]:
+    """
+    Gemini 응답을 28개 key, 0~3 정수 점수로 정규화한다.
+    """
+    normalized = _empty_factor_scores()
+
+    for key in FACTOR_KEYS:
+        value = raw_scores.get(key, 0)
+
+        try:
+            value = int(value)
+        except Exception:
+            value = 0
+
+        if value < 0:
+            value = 0
+        if value > 3:
+            value = 3
+
+        normalized[key] = value
+
+    return normalized
+
+
+def extract_factors_gemini(script: str, classification: Dict[str, int] | None = None) -> Dict[str, Any]:
+    """
+    Gemini API를 사용해 28요인을 추출한다.
+
+    Gemini REST API generateContent 엔드포인트를 사용한다.
+    """
+    config = get_gemini_config()
+    api_key = config["api_key"]
+    model = config["model"]
+
+    if not api_key:
+        return {
+            "ok": False,
+            "status": "not_configured",
+            "message": "Gemini API Key가 아직 설정되지 않았습니다.",
+            "factors": _empty_factor_scores(),
+            "backend": "gemini_api",
+        }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": _build_gemini_prompt(script, classification)
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.0,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=90,
+        )
+        response.raise_for_status()
+
+        data = response.json()
+
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return {
+                "ok": False,
+                "status": "error",
+                "message": "Gemini API 응답에 candidates가 없습니다.",
+                "factors": _empty_factor_scores(),
+                "backend": "gemini_api",
+            }
+
+        parts = candidates[0].get("content", {}).get("parts", [])
+        if not parts:
+            return {
+                "ok": False,
+                "status": "error",
+                "message": "Gemini API 응답에 content.parts가 없습니다.",
+                "factors": _empty_factor_scores(),
+                "backend": "gemini_api",
+            }
+
+        raw_text = parts[0].get("text", "")
+        raw_json = _extract_json_object(raw_text)
+        factors = _normalize_factor_scores(raw_json)
+
+        return {
+            "ok": True,
+            "status": "success",
+            "message": "Gemini API 28요인 추출 성공",
+            "factors": factors,
+            "backend": "gemini_api",
+        }
+
+    except requests.exceptions.Timeout:
+        return {
+            "ok": False,
+            "status": "timeout",
+            "message": "Gemini API 응답 시간이 초과되었습니다.",
+            "factors": _empty_factor_scores(),
+            "backend": "gemini_api",
+        }
+
+    except requests.exceptions.ConnectionError:
+        return {
+            "ok": False,
+            "status": "connection_error",
+            "message": "Gemini API에 연결할 수 없습니다.",
+            "factors": _empty_factor_scores(),
+            "backend": "gemini_api",
+        }
+
+    except Exception as error:
+        return {
+            "ok": False,
+            "status": "error",
+            "message": f"Gemini API 28요인 추출 중 오류가 발생했습니다: {error}",
+            "factors": _empty_factor_scores(),
+            "backend": "gemini_api",
+        }
+
+
+def extract_factors(
+    script: str,
+    classification: Dict[str, int] | None = None,
+    backend: str = "mock",
+) -> Dict[str, Any]:
+    """
+    28요인 추출 통합 진입점.
+
+    backend:
+    - mock
+    - gemini_api
+    """
+    if backend == "gemini_api":
+        return extract_factors_gemini(script, classification)
+
+    return extract_factors_mock(script, classification)
