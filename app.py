@@ -5,6 +5,7 @@
 
 import json
 import re
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
@@ -842,6 +843,148 @@ def make_json_export(analysis_result: Dict[str, Any]) -> str:
     return json.dumps(export_data, ensure_ascii=False, indent=2)
 
 
+
+def make_docx_report_bytes(report_text: str) -> bytes | None:
+    """
+    편집된 보고서 텍스트를 DOCX 파일 바이트로 변환한다.
+    모델/분석 로직과 무관한 다운로드용 보조 함수다.
+    """
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except Exception:
+        return None
+
+    doc = Document()
+    title = doc.add_heading("상담 요약 보고서", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    doc.add_paragraph(f"작성일: {datetime.now().strftime('%Y.%m.%d')}")
+    doc.add_paragraph(f"내담자: {st.session_state.selected_client} / 회기: {st.session_state.selected_session}")
+    doc.add_paragraph("")
+
+    for line in str(report_text or "").split("\n"):
+        stripped = line.strip()
+
+        if not stripped:
+            doc.add_paragraph("")
+        elif stripped.startswith("[") and stripped.endswith("]"):
+            doc.add_heading(stripped.strip("[]"), level=1)
+        elif re.match(r"^\d+\.\s", stripped):
+            doc.add_heading(stripped, level=2)
+        elif stripped.startswith("## "):
+            doc.add_heading(stripped.replace("## ", "", 1), level=1)
+        elif stripped.startswith("# "):
+            doc.add_heading(stripped.replace("# ", "", 1), level=0)
+        else:
+            doc.add_paragraph(stripped)
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
+def make_pdf_report_bytes(report_text: str) -> bytes | None:
+    """
+    편집된 보고서 텍스트를 PDF 파일 바이트로 변환한다.
+    한글 깨짐을 막기 위해 ReportLab 내장 CJK CID 폰트를 우선 사용한다.
+    """
+    try:
+        from xml.sax.saxutils import escape
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    except Exception:
+        return None
+
+    font_name = "HYGothic-Medium"
+
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
+        pdfmetrics.registerFont(UnicodeCIDFont("HYSMyeongJo-Medium"))
+    except Exception:
+        font_name = "Helvetica"
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=18 * mm,
+        leftMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+    )
+
+    styles = getSampleStyleSheet()
+    styles.add(
+        ParagraphStyle(
+            name="KoreanTitle",
+            fontName=font_name,
+            fontSize=21,
+            leading=28,
+            alignment=1,
+            textColor=colors.HexColor("#123160"),
+            spaceAfter=16,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="KoreanHeading",
+            fontName=font_name,
+            fontSize=13,
+            leading=18,
+            textColor=colors.HexColor("#1E40AF"),
+            spaceBefore=12,
+            spaceAfter=6,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="KoreanBody",
+            fontName=font_name,
+            fontSize=9.5,
+            leading=15,
+            textColor=colors.HexColor("#1F2937"),
+        )
+    )
+
+    story = [
+        Paragraph("상담 요약 보고서", styles["KoreanTitle"]),
+        Paragraph(
+            escape(f"작성일: {datetime.now().strftime('%Y.%m.%d')} / {st.session_state.selected_client} / {st.session_state.selected_session}"),
+            styles["KoreanBody"],
+        ),
+        Spacer(1, 8),
+    ]
+
+    for line in str(report_text or "").split("\n"):
+        stripped = line.strip()
+
+        if not stripped:
+            story.append(Spacer(1, 6))
+            continue
+
+        safe_line = escape(stripped)
+
+        if stripped.startswith("[") and stripped.endswith("]"):
+            story.append(Paragraph(safe_line.strip("[]"), styles["KoreanHeading"]))
+        elif re.match(r"^\d+\.\s", stripped):
+            story.append(Paragraph(safe_line, styles["KoreanHeading"]))
+        elif stripped.startswith("# "):
+            story.append(Paragraph(escape(stripped.replace("# ", "", 1)), styles["KoreanTitle"]))
+        elif stripped.startswith("## "):
+            story.append(Paragraph(escape(stripped.replace("## ", "", 1)), styles["KoreanHeading"]))
+        else:
+            story.append(Paragraph(safe_line, styles["KoreanBody"]))
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
 # =========================================================
 # 7. Session State 초기화
 # =========================================================
@@ -999,6 +1142,122 @@ def apply_global_style():
             border-right: 1px solid {BORDER};
         }}
 
+        section[data-testid="stSidebar"] .block-container {{
+            padding: 1.65rem 1.35rem 1.25rem;
+            min-height: 100vh;
+        }}
+
+        .sidebar-brand {{
+            font-size: 1.62rem;
+            font-weight: 760;
+            color: #2F3340;
+            letter-spacing: -0.04em;
+            margin-top: 0.1rem;
+            margin-bottom: 0.62rem;
+        }}
+
+        .sidebar-subtitle {{
+            font-size: 0.92rem;
+            color: #7A808C;
+            line-height: 1.5;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.015em;
+        }}
+
+        .sidebar-profile-card {{
+            background: #FFFFFF;
+            border: 1px solid #D7E2F0;
+            border-radius: 1.05rem;
+            padding: 1rem 1.05rem;
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.035);
+            margin-bottom: 0.8rem;
+        }}
+
+        .sidebar-avatar {{
+            width: 3.05rem;
+            height: 3.05rem;
+            border-radius: 999px;
+            background: {PRIMARY};
+            color: #FFFFFF;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 1.28rem;
+            flex-shrink: 0;
+        }}
+
+        .sidebar-profile-name {{
+            font-size: 1.02rem;
+            font-weight: 720;
+            color: {TEXT};
+            letter-spacing: -0.035em;
+            margin-bottom: 0.18rem;
+        }}
+
+        .sidebar-profile-email {{
+            font-size: 0.78rem;
+            color: #64748B;
+            line-height: 1.3;
+        }}
+
+        .sidebar-plan-pill {{
+            border: 1px solid #BFDBFE;
+            background: #EFF6FF;
+            color: {PRIMARY_DARK};
+            border-radius: 999px;
+            padding: 0.68rem 0.9rem;
+            text-align: center;
+            font-size: 0.86rem;
+            font-weight: 720;
+            letter-spacing: -0.02em;
+            margin-bottom: 1.45rem;
+        }}
+
+        .sidebar-section-title {{
+            font-size: 1.02rem;
+            font-weight: 720;
+            color: {TEXT};
+            letter-spacing: -0.035em;
+            margin-bottom: 0.9rem;
+        }}
+
+        .sidebar-label {{
+            font-size: 0.82rem;
+            color: #64748B;
+            font-weight: 540;
+            margin-bottom: 0.4rem;
+        }}
+
+        .sidebar-spacer {{
+            height: 11.5rem;
+        }}
+
+        section[data-testid="stSidebar"] hr {{
+            margin: 1.65rem 0;
+            border-color: #C9D2DE;
+        }}
+
+        section[data-testid="stSidebar"] div[data-baseweb="select"] > div {{
+            border-radius: 0.75rem;
+            border-color: #E2E8F0;
+            min-height: 2.75rem;
+            background: #FFFFFF;
+        }}
+
+        section[data-testid="stSidebar"] div.stButton > button:first-child {{
+            min-height: 2.55rem;
+            font-size: 0.86rem;
+            font-weight: 600;
+            background: #FFFFFF;
+            color: {TEXT};
+            border-color: #CBD5E1;
+            box-shadow: none;
+        }}
+
         .app-title {{
             font-size: 1.72rem;
             font-weight: 700;
@@ -1134,23 +1393,35 @@ def apply_global_style():
 # =========================================================
 def render_sidebar():
     with st.sidebar:
-        st.title("CounsHelper")
-        st.caption("상담 기록 분석 & 보고서 자동화")
+        st.markdown('<div class="sidebar-brand">CounsHelper</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="sidebar-subtitle">상담 기록 분석 & 보고서 자동화</div>',
+            unsafe_allow_html=True,
+        )
 
-        st.info(
-            f"보고서 백엔드: `{MODEL_BACKEND}`\n\n"
-            f"분류 백엔드: `{CLASSIFIER_BACKEND}`\n\n"
-            f"28요인 백엔드: `{FACTOR_BACKEND}`"
+        st.markdown(
+            """
+            <div class="sidebar-profile-card">
+                <div class="sidebar-avatar">보</div>
+                <div>
+                    <div class="sidebar-profile-name">보아즈</div>
+                    <div class="sidebar-profile-email">boaz@counshelper.ai</div>
+                </div>
+            </div>
+            <div class="sidebar-plan-pill">구독 상태 · MVP Demo 플랜</div>
+            """,
+            unsafe_allow_html=True,
         )
 
         st.divider()
 
-        st.sidebar.markdown("### 내담자 선택")
+        st.markdown('<div class="sidebar-section-title">내담자 선택</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-label">내담자 검색</div>', unsafe_allow_html=True)
 
         client_options = CLIENTS["내담자 ID"].tolist()
 
         if not client_options:
-            st.sidebar.warning("표시할 내담자 데이터가 없습니다.")
+            st.warning("표시할 내담자 데이터가 없습니다.")
             selected_client_id = st.session_state.selected_client
         else:
             if st.session_state.selected_client in client_options:
@@ -1162,8 +1433,9 @@ def render_sidebar():
                 "내담자",
                 options=client_options,
                 index=default_index,
+                label_visibility="collapsed",
             )
-            
+
         if selected_client_id != st.session_state.selected_client:
             st.session_state.selected_client = selected_client_id
             client_sessions = SESSIONS[SESSIONS["내담자 ID"] == selected_client_id]
@@ -1185,8 +1457,12 @@ def render_sidebar():
 
         st.divider()
 
-        st.caption("MVP Demo")
-        st.caption("본 시스템은 상담사의 임상적 판단을 대체하지 않습니다.")
+        st.markdown('<div class="sidebar-spacer"></div>', unsafe_allow_html=True)
+
+        if st.button("⚙️  설정", use_container_width=True):
+            st.toast(
+                f"보고서 {MODEL_BACKEND} · 분류 {CLASSIFIER_BACKEND} · 28요인 {FACTOR_BACKEND}"
+            )
 
 
 # =========================================================
@@ -1266,12 +1542,13 @@ def render_session_cards():
             )
 
             with st.container(border=True):
-                c1, c2, c3, c4, c5 = st.columns([0.14, 0.18, 0.34, 0.18, 0.16])
+                info_col, button_col = st.columns([0.78, 0.22], vertical_alignment="center")
 
-                c1.markdown(f"**{row['회기']}**")
-                c3.write(row["상담 주제"])
+                with info_col:
+                    st.markdown(f"**{row['회기']} · {row['상담 주제']}**")
+                    st.caption(f"{row['상담일']} · {row['보고서 상태']}")
 
-                with c5:
+                with button_col:
                     button_label = "선택됨" if selected else "기록 보기"
 
                     if st.button(
@@ -1284,12 +1561,13 @@ def render_session_cards():
                         st.rerun()
 
     with st.container(border=True):
-        c1, c2, c3 = st.columns([0.18, 0.60, 0.22])
-        c1.markdown("**+ 신규**")
-        c2.write("새 상담 내역 추가")
-        c2.caption("회기 정보와 상담 내용을 입력해 새 기록을 생성합니다.")
+        info_col, button_col = st.columns([0.78, 0.22], vertical_alignment="center")
 
-        with c3:
+        with info_col:
+            st.markdown("**+ 신규　새 상담 내역 추가**")
+            st.caption("회기 정보와 상담 내용을 입력해 새 기록을 생성합니다.")
+
+        with button_col:
             if st.button("추가하기", key="add_new_session", use_container_width=True):
                 start_new_session()
                 st.rerun()
@@ -1348,13 +1626,9 @@ def render_record_editor():
 
 
 def render_record_page():
-    left, right = st.columns([0.38, 0.62], gap="large")
-
-    with left:
-        render_session_cards()
-
-    with right:
-        render_record_editor()
+    render_session_cards()
+    st.markdown("<div style='height: 1.1rem;'></div>", unsafe_allow_html=True)
+    render_record_editor()
 
 
 # =========================================================
@@ -1535,7 +1809,7 @@ def render_report():
         '<div class="page-desc">KoAlpaca 요약 모델이 들어갈 위치입니다. 현재는 선택한 보고서 백엔드 결과를 표시합니다.</div>',
         unsafe_allow_html=True,
     )
-    
+
     result = st.session_state.analysis_result
 
     if result is None:
@@ -1560,7 +1834,10 @@ def render_report():
         height=620,
     )
 
-    c1, c2 = st.columns([0.22, 0.78])
+    pdf_bytes = make_pdf_report_bytes(edited_report)
+    docx_bytes = make_docx_report_bytes(edited_report)
+
+    c1, c2, c3 = st.columns(3)
 
     with c1:
         st.download_button(
@@ -1572,7 +1849,28 @@ def render_report():
         )
 
     with c2:
-        st.caption("PDF/DOCX 다운로드는 이후 단계에서 추가합니다.")
+        st.download_button(
+            "PDF 다운로드",
+            data=pdf_bytes if pdf_bytes is not None else b"",
+            file_name=f"{st.session_state.selected_client}_{st.session_state.selected_session}_report.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            disabled=pdf_bytes is None,
+        )
+        if pdf_bytes is None:
+            st.caption("reportlab 설치 후 활성화됩니다.")
+
+    with c3:
+        st.download_button(
+            "DOCX 다운로드",
+            data=docx_bytes if docx_bytes is not None else b"",
+            file_name=f"{st.session_state.selected_client}_{st.session_state.selected_session}_report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            disabled=docx_bytes is None,
+        )
+        if docx_bytes is None:
+            st.caption("python-docx 설치 후 활성화됩니다.")
 
 
 # =========================================================
@@ -1662,3 +1960,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
