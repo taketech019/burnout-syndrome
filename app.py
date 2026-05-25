@@ -1,6 +1,6 @@
-"""CounsHelper — Streamlit 진입점 (Phase 8: WeeNote/Mingl 정확 모방).
+"""CounsHelper — Streamlit 진입점 (Phase 9: 사설 상담센터 도메인 + Material icons).
 
-violet #7C3AED 톤 + WeeNote 상담일지 폼 + Mingl 프로필 + 통계 페이지 + AI 도우미 슬라이드 패널.
+violet #7C3AED 톤 + WeeNote/Mingl 디자인 가져오되 어휘는 사설 상담센터 톤(성인 내담자).
 6 페이지: 내담자 홈 / 상담내역 기록·추가 / 분석 대시보드 / 통계 / AI 보고서 / 챗봇.
 """
 import json
@@ -29,9 +29,9 @@ from src.summarizer import summarize
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 
 APP_NAME = "CounsHelper"
-APP_SUB = "학교상담시스템 v0.8"
-USER_LINE_1 = "2026학년도"
-USER_LINE_2 = "전문상담사 (데모)"
+APP_SUB = "상담 기록 분석 v0.9"
+USER_LINE_1 = "MVP Demo"
+USER_LINE_2 = "상담심리사 (데모)"
 CLASSIFIER_BACKEND = os.getenv("CLASSIFIER_BACKEND", "gemma")
 FACTOR_BACKEND = os.getenv("FACTOR_BACKEND", "gemini_api")
 SUMMARIZER_BACKEND = os.getenv("SUMMARIZER_BACKEND", "koalpaca_api")
@@ -69,6 +69,24 @@ CHART_PALETTE = {
     "중독/기능": "#EF4444",
     "정상군": "#94A3B8",
 }
+
+
+def _icon_svg(name: str, color: str = PRIMARY, size: int = 16) -> str:
+    """인라인 SVG 아이콘 — 카드 헤더용. 외부 의존성 없이 핵심 6개만."""
+    paths = {
+        "spark":  "M12 2l2.5 7.5L22 12l-7.5 2.5L12 22l-2.5-7.5L2 12l7.5-2.5z",
+        "chart":  "M3 3v18h18 M7 14l3-3 4 4 5-7",
+        "doc":    "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6",
+        "alert":  "M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z M12 9v4 M12 17h.01",
+        "people": "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2 M9 11a4 4 0 100-8 4 4 0 000 8z",
+        "pulse":  "M22 12h-4l-3 9L9 3l-3 9H2",
+    }
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" '
+        f'stroke="{color}" stroke-width="2" stroke-linecap="round" '
+        f'stroke-linejoin="round" style="vertical-align:-3px;margin-right:6px;">'
+        f'<path d="{paths[name]}"/></svg>'
+    )
 
 
 def apply_global_style() -> None:
@@ -355,22 +373,22 @@ DEFAULT_DIALOGUE = pd.DataFrame({
     "화자": ["상담사", "내담자", "상담사", "내담자"],
     "발화": [
         "오늘은 어떤 이야기를 나누고 싶으세요?",
-        "요즘 친구들과 어울리기가 어려워요.",
-        "어떤 점에서 어려움을 느끼시나요?",
-        "쉬는 시간에 혼자 있는 일이 많아요.",
+        "요즘 업무 부담이 커져서 잠을 깊게 못 자고 있어요.",
+        "수면에 어떤 변화가 있었는지 좀 더 자세히 말씀해 주실 수 있을까요?",
+        "잠들기까지 한두 시간이 걸리고, 새벽에 자주 깹니다.",
     ],
 })
 
 NAV_ITEMS = [
-    ("내담자 홈", "🏠"),
-    ("상담내역 기록·추가", "📋"),
-    ("분석 대시보드", "📊"),
-    ("통계", "📈"),
-    ("AI 보고서", "📄"),
-    ("챗봇", "💬"),
+    ("내담자 홈", ":material/person:"),
+    ("상담내역 기록·추가", ":material/article:"),
+    ("분석 대시보드", ":material/dashboard:"),
+    ("통계", ":material/bar_chart:"),
+    ("AI 보고서", ":material/description:"),
+    ("챗봇", ":material/forum:"),
 ]
 
-SCOPE_OPTIONS = ["우울/불안", "우울", "불안", "중독", "관계", "학업", "위기"]
+SCOPE_OPTIONS = ["우울/불안", "우울", "불안", "중독", "관계", "직무 스트레스", "위기"]
 
 
 # ── Session State ─────────────────────────────────────────────────────────────
@@ -388,7 +406,7 @@ def init_session_state() -> None:
         "ai_panel_open": False,
         "ai_panel_history": [],
         "analysis_result": None,
-        "stats_filter": "학년도",
+        "stats_filter": "전체",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -559,14 +577,14 @@ def render_sidebar() -> None:
                 )
                 st.session_state.selected_client = options[label]
 
-        with st.expander("➕ 신규 등록"):
+        with st.expander("신규 등록", icon=":material/person_add:"):
             with st.form("add_patient_form_sidebar"):
-                new_alias = st.text_input("alias (필수)", placeholder="예: S-2407")
+                new_alias = st.text_input("alias (필수)", placeholder="예: C-007")
                 new_gender = st.selectbox("성별", ["여성", "남성", "기타"])
-                new_age = st.number_input("연령", min_value=6, max_value=20, value=14)
+                new_age = st.number_input("연령", min_value=18, max_value=80, value=32)
                 new_region = st.text_input("지역", placeholder="예: 서울")
                 new_note = st.text_area("메모", height=68,
-                                        placeholder="예: 중2 · 학업 스트레스 호소")
+                                        placeholder="예: 직장 스트레스로 인한 불면 호소")
                 if st.form_submit_button("등록", use_container_width=True):
                     if not new_alias.strip():
                         st.error("alias 필수")
@@ -582,17 +600,17 @@ def render_sidebar() -> None:
         for label, icon in NAV_ITEMS:
             active = st.session_state.page == label
             btn_type = "primary" if active else "secondary"
-            if st.button(f"{icon}  {label}", key=f"nav_{label}",
+            if st.button(f"{icon} {label}", key=f"nav_{label}",
                          use_container_width=True, type=btn_type):
                 go_page(label)
                 st.rerun()
 
         st.divider()
-        st.button("⚙️  설정", key="nav_settings",
+        st.button(":material/settings: 설정", key="nav_settings",
                   disabled=True, use_container_width=True)
-        st.button("💬  문의", key="nav_inquiry",
+        st.button(":material/mail: 문의", key="nav_inquiry",
                   disabled=True, use_container_width=True)
-        st.button("❓  도움말", key="nav_help",
+        st.button(":material/help: 도움말", key="nav_help",
                   disabled=True, use_container_width=True)
 
 
@@ -638,7 +656,7 @@ def render_page_header(
 
 def render_ai_panel(context_session_id: Optional[str] = None) -> None:
     st.markdown(
-        '<div class="ai-panel-header">🤖 AI 도우미</div>',
+        f'<div class="ai-panel-header">{_icon_svg("spark", size=18)}AI 도우미</div>',
         unsafe_allow_html=True,
     )
 
@@ -647,7 +665,7 @@ def render_ai_panel(context_session_id: Optional[str] = None) -> None:
         if sess:
             label = sess.get("session_no") or sess["session_date"]
             st.markdown(
-                f'<span class="context-chip">📎 회기 첨부 — {label}</span>',
+                f'<span class="context-chip">{_icon_svg("doc", color=PRIMARY_DARK, size=12)}회기 첨부 — {label}</span>',
                 unsafe_allow_html=True,
             )
 
@@ -672,10 +690,10 @@ def render_ai_panel(context_session_id: Optional[str] = None) -> None:
     for msg in history[-8:]:
         role = msg["role"]
         if role == "user":
-            with st.chat_message("user", avatar="👤"):
+            with st.chat_message("user"):
                 st.markdown(msg["content"])
         else:
-            with st.chat_message("assistant", avatar="🤖"):
+            with st.chat_message("assistant"):
                 st.markdown(msg["content"])
                 if msg.get("sources"):
                     with st.expander("출처", expanded=False):
@@ -689,7 +707,7 @@ def render_ai_panel(context_session_id: Optional[str] = None) -> None:
 
     cols = st.columns(2)
     with cols[0]:
-        if st.button("➕ 새 대화", key="ai_panel_new",
+        if st.button(":material/add: 새 대화", key="ai_panel_new",
                      use_container_width=True):
             st.session_state.ai_panel_history = []
             st.rerun()
@@ -715,7 +733,7 @@ def _handle_panel_query(prompt: str, session_id: Optional[str]) -> None:
     if result.get("error"):
         history.append({
             "role": "assistant",
-            "content": f"⚠️ {result['error']}",
+            "content": result["error"],
             "sources": [],
         })
     else:
@@ -736,7 +754,7 @@ def page_with_optional_panel(
     main_render_fn()
     if st.session_state.get("ai_panel_open"):
         st.divider()
-        with st.expander("🤖 AI 도우미", expanded=True):
+        with st.expander("AI 도우미", expanded=True, icon=":material/smart_toy:"):
             render_ai_panel(context_session_id)
 
 
@@ -746,8 +764,8 @@ def page_with_optional_panel(
 def render_patient_home() -> None:
     pid = st.session_state.selected_client
     if not pid:
-        render_page_header("내담자 홈", subtitle="좌측에서 내담자를 선택하거나 ➕ 신규 등록")
-        st.info("등록된 내담자를 선택하세요. 사이드바 '➕ 신규 등록'에서 추가 가능합니다.")
+        render_page_header("내담자 홈", subtitle="좌측에서 내담자를 선택하거나 신규 등록")
+        st.info("등록된 내담자를 선택하세요. 사이드바 '신규 등록'에서 추가 가능합니다.")
         return
 
     p = db.get_patient(pid)
@@ -799,7 +817,12 @@ def render_patient_home() -> None:
     st.markdown("")
 
     # 탭: 정보 / 상담관리 / 검사관리 / 문서관리
-    tabs = st.tabs(["📌 내담자 정보", "💬 상담관리", "🧪 검사관리", "📁 문서관리"])
+    tabs = st.tabs([
+        ":material/badge: 내담자 정보",
+        ":material/forum: 상담관리",
+        ":material/science: 검사관리",
+        ":material/folder: 문서관리",
+    ])
 
     with tabs[0]:
         cols = st.columns([0.7, 0.3])
@@ -832,14 +855,14 @@ def render_patient_home() -> None:
                     sui_count += 1
             if sui_count > 0:
                 st.markdown(
-                    f'<div class="alert-card">⚠️ 자살 사고 라벨이 {sui_count}회 표시되었습니다. '
-                    f'안전 평가 우선.</div>',
+                    f'<div class="alert-card">{_icon_svg("alert", color="#991B1B", size=14)}'
+                    f'자살 사고 라벨이 {sui_count}회 표시되었습니다. 안전 평가 우선.</div>',
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
                     '<div class="info-card" style="color:#10B981; font-weight:600;">'
-                    '✓ 자살/자해 관련 신호 없음</div>',
+                    '자살/자해 관련 신호 없음</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -968,11 +991,11 @@ def _render_existing_record_form_weenote(sid: str) -> None:
 
     # 헤더 + 액션
     summ = db.get_latest_analysis(sid, "summary")
-    actions = [("🤖 AI 도우미", toggle_ai_panel, "primary")]
+    actions = [(":material/smart_toy: AI 도우미", toggle_ai_panel, "primary")]
     if summ:
-        actions = [("📊 대시보드", lambda: go_page("분석 대시보드"), "secondary")] + actions
+        actions = [(":material/dashboard: 대시보드", lambda: go_page("분석 대시보드"), "secondary")] + actions
     else:
-        actions = [("🧠 AI 분석 실행", lambda: _trigger_reanalyze(sid), "primary")]
+        actions = [(":material/psychology: AI 분석 실행", lambda: _trigger_reanalyze(sid), "primary")]
 
     render_page_header(
         "상담일지 열람",
@@ -988,7 +1011,7 @@ def _render_existing_record_form_weenote(sid: str) -> None:
                    unsafe_allow_html=True)
     g1[2].markdown(f"**상담분류**<br><span class='profile-meta-value'>{s.get('scope') or '미분류'}</span>",
                    unsafe_allow_html=True)
-    g1[3].markdown(f"**상담자소속**<br><span class='profile-meta-value'>학교상담실</span>",
+    g1[3].markdown(f"**상담자소속**<br><span class='profile-meta-value'>사설 상담센터</span>",
                    unsafe_allow_html=True)
 
     st.markdown("")
@@ -1041,14 +1064,14 @@ def _render_existing_record_form_weenote(sid: str) -> None:
     st.markdown("")
     st.markdown("**첨부파일 (0)**")
     st.markdown(
-        '<div class="attach-zone">📎 첨부파일 없음</div>',
+        f'<div class="attach-zone">{_icon_svg("doc", color=SUBTEXT, size=14)}첨부파일 없음</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown("")
     del_cols = st.columns([0.15, 0.85])
     with del_cols[0]:
-        if st.button("🗑 일지 삭제", key=f"del_{sid}"):
+        if st.button(":material/delete: 일지 삭제", key=f"del_{sid}"):
             db.delete_session(sid)
             st.session_state.selected_session = None
             st.session_state.record_mode = "existing"
@@ -1067,10 +1090,13 @@ def _render_new_record_form_weenote(pid: str, existing_count: int) -> None:
     new_session_no = g1[0].text_input("회기 번호", value=f"{existing_count + 1}회기")
     new_session_date = g1[1].text_input("회기 일시", value=date.today().isoformat())
     new_scope = g1[2].selectbox("상담 범위", SCOPE_OPTIONS)
-    new_topic = g1[3].text_input("상담 주제", placeholder="예: 친구 관계 어려움")
+    new_topic = g1[3].text_input("상담 주제", placeholder="예: 직장 스트레스로 인한 불면")
 
     st.markdown("")
-    tab1, tab2 = st.tabs(["📝 전사 텍스트 붙여넣기", "💬 발화 단위 입력"])
+    tab1, tab2 = st.tabs([
+        ":material/edit_note: 전사 텍스트 붙여넣기",
+        ":material/chat: 발화 단위 입력",
+    ])
 
     transcript_text = ""
     with tab1:
@@ -1101,7 +1127,7 @@ def _render_new_record_form_weenote(pid: str, existing_count: int) -> None:
     st.markdown("")
     btn_cols = st.columns([0.3, 0.3, 0.4])
     with btn_cols[0]:
-        if st.button("💾 임시 저장", key="rec_save_only",
+        if st.button(":material/save: 임시 저장", key="rec_save_only",
                      use_container_width=True):
             if not final_script.strip():
                 st.error("상담 발화 입력 필요")
@@ -1115,7 +1141,7 @@ def _render_new_record_form_weenote(pid: str, existing_count: int) -> None:
                 st.success(f"저장됨 (session={sess['id']})")
                 st.rerun()
     with btn_cols[1]:
-        if st.button("🧠 저장 + AI 분석 실행",
+        if st.button(":material/psychology: 저장 + AI 분석 실행",
                      key="rec_save_analyze",
                      type="primary", use_container_width=True):
             if not final_script.strip():
@@ -1178,7 +1204,7 @@ def _render_dashboard_body() -> None:
     render_page_header(
         f"분석 대시보드",
         subtitle=f"{p['alias']} · 우울·불안·중독 위험도, 28요인, 회기별 변화 추이",
-        actions=[("🤖 AI 도우미", toggle_ai_panel, "primary")],
+        actions=[(":material/smart_toy: AI 도우미", toggle_ai_panel, "primary")],
     )
 
     options = {
@@ -1195,7 +1221,7 @@ def _render_dashboard_body() -> None:
 
     if not (cls and fact):
         st.warning("이 회기에 분석 결과 없음.")
-        if st.button("🧠 지금 분석 실행", type="primary"):
+        if st.button(":material/psychology: 지금 분석 실행", type="primary"):
             with st.spinner("분석 중..."):
                 reanalyze_session(s["id"])
             st.rerun()
@@ -1222,7 +1248,11 @@ def _render_dashboard_body() -> None:
     left, right = st.columns([0.66, 0.34], gap="large")
 
     with left:
-        st.markdown("**📊 상위 28요인 Top 10**")
+        st.markdown(
+            f"<div style='font-weight:700; margin-bottom:0.4rem;'>"
+            f"{_icon_svg('chart')}상위 28요인 Top 10</div>",
+            unsafe_allow_html=True,
+        )
         df = build_factor_dataframe(factors)
         selected_cats = st.multiselect(
             "카테고리 필터",
@@ -1246,14 +1276,18 @@ def _render_dashboard_body() -> None:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("**📈 회기별 변화 추이**")
+        st.markdown(
+            f"<div style='font-weight:700; margin-bottom:0.4rem;'>"
+            f"{_icon_svg('pulse')}회기별 변화 추이</div>",
+            unsafe_allow_html=True,
+        )
         _render_trend_chart(pid)
 
     with right:
         insight_text = dashboard_insight(s["id"])
         st.markdown(
             f'<div class="insight-card">'
-            f'<h4>📌 분석 해석</h4>'
+            f'<h4>{_icon_svg("spark")}분석 해석</h4>'
             f'<div class="insight-body">{insight_text}</div>'
             f'</div>',
             unsafe_allow_html=True,
@@ -1270,7 +1304,7 @@ def _render_dashboard_body() -> None:
                 one_line = hira_summary_one_line(h, p, primary)
                 st.markdown(
                     f'<div class="insight-card">'
-                    f'<h4>📊 HIRA 인구통계</h4>'
+                    f'<h4>{_icon_svg("people")}HIRA 인구통계</h4>'
                     f'<div class="insight-body">{one_line or h["summary_text"]}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
@@ -1279,15 +1313,19 @@ def _render_dashboard_body() -> None:
 
         if factors.get("자살생각", 0) > 0:
             st.markdown(
-                '<div class="alert-card">⚠️ 자살 사고 라벨이 표시되었습니다. '
-                '상담사가 별도 안전 평가를 수행하세요.</div>',
+                f'<div class="alert-card">{_icon_svg("alert", color="#991B1B", size=14)}'
+                '자살 사고 라벨이 표시되었습니다. 상담사가 별도 안전 평가를 수행하세요.</div>',
                 unsafe_allow_html=True,
             )
 
     st.divider()
 
     if summ:
-        st.markdown("**📋 AI 분석 요약 (4섹션)**")
+        st.markdown(
+            f"<div style='font-weight:700; margin-bottom:0.4rem;'>"
+            f"{_icon_svg('doc')}AI 분석 요약 (4섹션)</div>",
+            unsafe_allow_html=True,
+        )
         sections = summ["payload"].get("sections", {})
         cards = [
             ("주요 증상", sections.get("symptoms", "")),
@@ -1366,8 +1404,8 @@ def render_stats_page() -> None:
     render_page_header(
         "통계",
         subtitle="전체 상담 활동 집계 및 분류 분포",
-        actions=[("📄 PDF", lambda: None, "secondary"),
-                 ("📥 엑셀 다운로드", lambda: None, "primary")],
+        actions=[(":material/picture_as_pdf: PDF", lambda: None, "secondary"),
+                 (":material/download: 엑셀 다운로드", lambda: None, "primary")],
     )
 
     # 날짜 + 빠른 필터 칩
@@ -1379,7 +1417,7 @@ def render_stats_page() -> None:
 
     # 빠른 필터 칩
     chip_cols = st.columns([0.08, 0.08, 0.08, 0.08, 0.08, 0.60])
-    chip_labels = ["학년도", "지난달", "이번 달", "어제", "오늘"]
+    chip_labels = ["전체", "지난달", "이번 달", "어제", "오늘"]
     for i, label in enumerate(chip_labels):
         with chip_cols[i]:
             active = st.session_state.get("stats_filter") == label
@@ -1409,7 +1447,11 @@ def render_stats_page() -> None:
     left, right = st.columns([0.66, 0.34], gap="large")
 
     with left:
-        st.markdown("**🗂 분류 체계**")
+        st.markdown(
+            f"<div style='font-weight:700; margin-bottom:0.4rem;'>"
+            f"{_icon_svg('chart')}분류 체계</div>",
+            unsafe_allow_html=True,
+        )
         dist = classification_distribution()
         dist_nonzero = dist[dist["건수"] > 0]
         chart_cols = st.columns([0.5, 0.5])
@@ -1450,7 +1492,11 @@ def render_stats_page() -> None:
                 st.caption("분석된 회기가 없습니다.")
 
         st.markdown("")
-        st.markdown("**📋 분류 테이블**")
+        st.markdown(
+            f"<div style='font-weight:700; margin-bottom:0.4rem;'>"
+            f"{_icon_svg('doc')}분류 테이블</div>",
+            unsafe_allow_html=True,
+        )
         st.dataframe(
             dist.rename(columns={"분류": "대분류", "건수": "건수"}),
             use_container_width=True, hide_index=True,
@@ -1460,7 +1506,7 @@ def render_stats_page() -> None:
         text = stats_insight(stats, dist)
         st.markdown(
             f'<div class="insight-card">'
-            f'<h4>📌 통계 해석</h4>'
+            f'<h4>{_icon_svg("spark")}통계 해석</h4>'
             f'<div class="insight-body">{text.replace(chr(10), "<br>")}</div>'
             f'</div>',
             unsafe_allow_html=True,
@@ -1497,7 +1543,7 @@ def _render_report_body() -> None:
         render_page_header(
             "AI 보고서",
             subtitle=f"{p['alias']} · {s.get('session_no') or '미분류'}",
-            actions=[("🧠 분석 실행", lambda: _trigger_reanalyze(s["id"]), "primary")],
+            actions=[(":material/psychology: 분석 실행", lambda: _trigger_reanalyze(s["id"]), "primary")],
         )
         st.warning("이 회기에 요약 결과 없음.")
         return
@@ -1533,14 +1579,15 @@ def _render_report_body() -> None:
         ac = st.columns(4)
         with ac[0]:
             st.download_button(
-                "📄 .md", md_bytes, file_name=f"report_{s['id']}.md",
+                ":material/description: .md", md_bytes,
+                file_name=f"report_{s['id']}.md",
                 mime="text/markdown", use_container_width=True,
                 key=f"dl_md_{s['id']}",
             )
         with ac[1]:
             if docx_bytes:
                 st.download_button(
-                    "📝 .docx", docx_bytes,
+                    ":material/article: .docx", docx_bytes,
                     file_name=f"report_{s['id']}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     use_container_width=True, key=f"dl_docx_{s['id']}",
@@ -1551,16 +1598,19 @@ def _render_report_body() -> None:
         with ac[2]:
             if pdf_bytes:
                 st.download_button(
-                    "📕 .pdf", pdf_bytes, file_name=f"report_{s['id']}.pdf",
+                    ":material/picture_as_pdf: .pdf", pdf_bytes,
+                    file_name=f"report_{s['id']}.pdf",
                     mime="application/pdf",
                     use_container_width=True, key=f"dl_pdf_{s['id']}",
                 )
             else:
-                st.button("📕 .pdf", disabled=True, use_container_width=True,
+                st.button(":material/picture_as_pdf: .pdf",
+                          disabled=True, use_container_width=True,
                           key=f"dl_pdf_d_{s['id']}",
                           help="weasyprint 환경 의존성")
         with ac[3]:
-            if st.button("🤖 AI", key=f"toggle_ai_report_{s['id']}",
+            if st.button(":material/smart_toy: AI",
+                         key=f"toggle_ai_report_{s['id']}",
                          type="primary", use_container_width=True):
                 toggle_ai_panel()
                 st.rerun()
@@ -1570,14 +1620,18 @@ def _render_report_body() -> None:
     insight = dashboard_insight(s["id"])
     st.markdown(
         f'<div class="insight-card">'
-        f'<h4>📌 분석 해석 (대시보드 연동)</h4>'
+        f'<h4>{_icon_svg("spark")}분석 해석 (대시보드 연동)</h4>'
         f'<div class="insight-body">{insight}</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown("")
-    st.markdown("**📝 보고서 본문 편집**")
+    st.markdown(
+        f"<div style='font-weight:700; margin-bottom:0.4rem;'>"
+        f"{_icon_svg('doc')}보고서 본문 편집</div>",
+        unsafe_allow_html=True,
+    )
     edit_cols = st.columns([0.5, 0.5])
     with edit_cols[0]:
         st.markdown("요약본 (한 단락)")
@@ -1630,15 +1684,19 @@ def render_chatbot() -> None:
         st.warning("RAG 인덱스 미생성. `python -m src.rag.ingest` 실행.")
         return
 
-    if st.button("🗑 대화 초기화", key="chat_clear"):
+    if st.button(":material/delete: 대화 초기화", key="chat_clear"):
         st.session_state.chat_history = []
         st.rerun()
 
-    st.markdown("**📌 예상 질문**")
+    st.markdown(
+        f"<div style='font-weight:700; margin-bottom:0.4rem;'>"
+        f"{_icon_svg('spark')}예상 질문</div>",
+        unsafe_allow_html=True,
+    )
     quick = [
         ("유사 상담 사례", "이 내담자와 비슷한 상담 사례가 있나요?"),
         ("임상 가이드", "수면 장애가 동반된 우울 사례의 임상 가이드를 알려주세요."),
-        ("위기 평가", "자해/자살 사고가 있는 학생에 대한 위기 평가 절차는?"),
+        ("위기 평가", "자해/자살 사고가 있는 내담자에 대한 위기 평가 절차는?"),
         ("다음 회기 질문", "다음 회기 질문을 추천해줘."),
         ("보고서 요약", "이번 회기 상담 내용을 보고서 형식으로 요약해줘."),
         ("위험 요인", "이 내담자의 주요 위험 요인을 정리해줘."),
@@ -1656,8 +1714,7 @@ def render_chatbot() -> None:
 
     st.markdown("")
     for msg in st.session_state.get("chat_history", []):
-        with st.chat_message(msg["role"],
-                             avatar="🤖" if msg["role"] == "assistant" else "👤"):
+        with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg.get("sources"):
                 with st.expander("출처"):
@@ -1677,7 +1734,7 @@ def _handle_chatbot_query(prompt: str) -> None:
     result = answer_query(prompt, k=5)
     if result.get("error"):
         history.append({
-            "role": "assistant", "content": f"⚠️ {result['error']}", "sources": [],
+            "role": "assistant", "content": result["error"], "sources": [],
         })
     else:
         history.append({
