@@ -1,10 +1,10 @@
 # 데이터 파일 무시, 폴더 구조(.gitkeep)는 유지
-data/**
-!data/*/
-!data/**/.gitkeep
-chroma_db/
-*.sqlite3
-*.db
+#data/**
+#!data/*/
+#!data/**/.gitkeep
+#chroma_db/
+#*.sqlite3
+#*.db
 
 # 환경변수
 .env
@@ -38,7 +38,7 @@ ai-model/*.err
 ai-model/*.out
 ai-model/v2_*.txt
 # 라벨링 원천 데이터 (Git 커밋 금지, CLAUDE.md 규칙)
-ai-model/label_*.json
+#ai-model/label_*.json
 
 # Streamlit·터널링 산출물
 .streamlit/secrets.toml
@@ -47,7 +47,7 @@ cloudflared.log
 streamlit.log
 
 #라벨링데이터
-data/raw/
+#data/raw/
 
 #secrets/enviroment
 .streamlit/secrets.toml
@@ -62,5 +62,8 @@ hf-upload/
 hf-space/
 hf-space-remote/
 
-data/processed/*
-!data/processed/.gitkeep
+#data/processed/*
+#!data/processed/.gitkeep
+
+# 용량 초과 파일 (GitHub 50MB 경고 초과, LFS 필요)
+data/references/심리상담데이터/download.tar
