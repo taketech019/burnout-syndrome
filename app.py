@@ -15,6 +15,7 @@ from typing import Dict, Any, List, Tuple
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 from src.analysis_pipeline import (
@@ -868,6 +869,8 @@ def init_session_state():
         "selected_client": DEFAULT_CLIENT_ID,
         "selected_session": DEFAULT_SESSION_NAME,
         "client_search": "",
+        "show_selected_client_label": False,
+        "client_search_nonce": 0,
         "patient_home_tab": "내담자 정보",
         "record_mode": "existing",
         "dialogue_rows": DEFAULT_SESSION_DIALOGUE.copy(),
@@ -1181,6 +1184,8 @@ SEND_ICON_PATH = Path(__file__).resolve().parent / "assets" / "send_icon.png"
 MD_ICON_PATH = Path(__file__).resolve().parent / "assets" / "md.png"
 PDF_ICON_PATH = Path(__file__).resolve().parent / "assets" / "pdf Ribbon.png"
 DOCX_ICON_PATH = Path(__file__).resolve().parent / "assets" / "docx.png"
+SEARCH_ICON_PATH = Path(__file__).resolve().parent / "assets" / "search.png"
+PROFILE_ICON_PATH = Path(__file__).resolve().parent / "assets" / "profile.png"
 
 
 def get_svg_data_uri(path: Path) -> str:
@@ -1203,6 +1208,8 @@ def get_png_data_uri(path: Path) -> str:
 
 def apply_global_style():
     chatbot_icon_data_uri = get_svg_data_uri(CHATBOT_ICON_PATH)
+    search_icon_data_uri = get_png_data_uri(SEARCH_ICON_PATH)
+    profile_icon_data_uri = get_png_data_uri(PROFILE_ICON_PATH)
 
     st.markdown(
         f"""
@@ -1229,13 +1236,14 @@ def apply_global_style():
         }}
 
         .main .block-container {{
-            padding-top: 0.05rem;
+            padding-top: 0 !important;
             padding-bottom: 0.5rem;
             max-width: 1180px;
             padding-left: 3rem;
             padding-right: 3rem;
             margin-left: auto;
             margin-right: auto;
+            transform: translateY(-0.9rem);
         }}
 
         section[data-testid="stSidebar"] {{
@@ -1455,6 +1463,7 @@ def apply_global_style():
             font-weight: 580;
             letter-spacing: -0.055em;
             line-height: 1.18;
+            margin-top: -1.2rem !important;
             margin-bottom: 0.2rem;
         }}
 
@@ -1943,7 +1952,7 @@ def apply_global_style():
         div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child p,
         div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child span {{
             font-size: 0.82rem !important;
-            font-weight: 520 !important;
+            font-weight: 400 !important;
             line-height: 1 !important;
             margin: 0 !important;
             white-space: nowrap !important;
@@ -1967,10 +1976,54 @@ def apply_global_style():
             color: #0F172A !important;
         }}
 
+
         div[data-testid="column"]:has(.factor-category-is-unselected) div.stButton > button:first-child:hover {{
             background: #EFF6FF !important;
             border-color: #93C5FD !important;
             color: #2563EB !important;
+        }}
+
+        /* AI 보고서 다운로드 버튼 디자인 */
+        div[data-testid="stDownloadButton"] > button:first-child {{
+            height: 2.65rem !important;
+            min-height: 2.65rem !important;
+            border-radius: 14px !important;
+            border: 1px solid #D6E3F3 !important;
+            background: #FFFFFF !important;
+            color: #0F172A !important;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.035) !important;
+            font-size: 0.9rem !important;
+            font-weight: 400 !important;
+            letter-spacing: -0.025em !important;
+            transition: all 0.15s ease !important;
+        }}
+
+        div[data-testid="stDownloadButton"] > button:first-child:hover {{
+            background: #F8FBFF !important;
+            border-color: #93C5FD !important;
+            color: #1D4ED8 !important;
+            transform: translateY(-1px);
+            box-shadow: 0 10px 22px rgba(37, 99, 235, 0.08) !important;
+        }}
+
+        div[data-testid="stDownloadButton"] > button:first-child p {{
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 0.45rem !important;
+            font-size: 0.9rem !important;
+            font-weight: 400 !important;
+            letter-spacing: -0.025em !important;
+            margin: 0 !important;
+            color: inherit !important;
+            white-space: nowrap !important;
+        }}
+
+        div[data-testid="stDownloadButton"] > button:first-child img {{
+            width: 1.05rem !important;
+            height: 1.05rem !important;
+            object-fit: contain !important;
+            display: inline-block !important;
         }}
 
         .report-section-head {{
@@ -2180,23 +2233,23 @@ def apply_global_style():
 
         /* 상담내역 카드 내부 구성 */
         .record-session-number-box {{
-            width: 4.25rem;
-            height: 3.35rem;
+            width: 4.8rem;
+            height: 3.9rem;
             border-radius: 13px;
             background: #EFF6FF;
             color: #1D4ED8;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.16rem;
-            font-weight: 600;
+            font-size: 1.05rem;
+            font-weight: 550;
             letter-spacing: -0.055em;
         }}
 
         .record-session-title {{
             color: #0F172A;
             font-size: 1.02rem;
-            font-weight: 520;
+            font-weight: 500;
             letter-spacing: -0.045em;
             line-height: 1.25;
             margin-bottom: 0.26rem;
@@ -2207,6 +2260,10 @@ def apply_global_style():
             font-size: 0.78rem;
             font-weight: 430;
             line-height: 1.4;
+        }}
+
+        .record-session-card {{
+            margin-bottom: 0.35rem !important;
         }}
 
         .record-session-status-wrap {{
@@ -2220,6 +2277,17 @@ def apply_global_style():
             display: none;
         }}
 
+        div[data-testid="element-container"]:has(.record-open-button-marker),
+        div[data-testid="stElementContainer"]:has(.record-open-button-marker),
+        div[data-testid="stMarkdownContainer"]:has(.record-open-button-marker) {{
+            display: none !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+        }}
+
         div[data-testid="column"]:has(.record-open-button-marker) {{
             display: flex !important;
             align-items: center !important;
@@ -2228,8 +2296,8 @@ def apply_global_style():
 
         div[data-testid="column"]:has(.record-open-button-marker) div.stButton > button:first-child {{
             width: 100% !important;
-            height: 2.25rem !important;
-            min-height: 2.25rem !important;
+            height: 2.45rem !important;
+            min-height: 2.45rem !important;
             border-radius: 11px !important;
             border: 1px solid #2563EB !important;
             background: #FFFFFF !important;
@@ -2265,7 +2333,11 @@ def apply_global_style():
         }}
 
         div[data-testid="column"]:has(.record-open-button-marker) div.stButton {{
-            transform: translateY(-0.50rem) !important;
+            margin: 0 !important;
+        }}
+
+        div[data-testid="column"]:has(.record-open-button-marker) div.stButton > button {{
+            transform: none !important;
         }}
 
 
@@ -2478,7 +2550,7 @@ def apply_global_style():
             padding: 0.2rem 0 0.35rem 0 !important;
             margin: 0 !important;
             box-sizing: border-box !important;
-            transform: translateY(-0.10rem) !important;
+            transform: translateY(-0.5rem) !important;
         }}
 
         .st-key-chat_composer_bar > div[data-testid="stVerticalBlock"] {{
@@ -2639,8 +2711,31 @@ def apply_global_style():
             background: #FFFFFF !important;
         }}
 
-        section[data-testid="stSidebar"] details {{
+        .new-client-expander-marker {{
+            display: none;
+        }}
+
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) {{
             border-radius: 11px;
+        }}
+
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary {{
+            background: transparent !important;
+            border: 1px solid #CBD5E1 !important;
+            color: #0F172A !important;
+            display: flex !important;
+            align-items: center !important;
+        }}
+
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:hover {{
+            background: rgba(255, 255, 255, 0.34) !important;
+            border-color: #CBD5E1 !important;
+            color: #0F172A !important;
+        }}
+
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary p,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary span {{
+            color: #0F172A !important;
         }}
 
         section[data-testid="stSidebar"] div.stButton > button:first-child {{
@@ -2757,7 +2852,7 @@ def apply_global_style():
             display: none;
         }}
 
-        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.register-client-button-marker) div.stButton > button:first-child,
+        /* 신규 등록 버튼만 가운데 정렬 */
         section[data-testid="stSidebar"] .st-key-register_new_client button {{
             justify-content: center !important;
             text-align: center !important;
@@ -2765,12 +2860,49 @@ def apply_global_style():
             padding-right: 0.82rem !important;
         }}
 
-        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.register-client-button-marker) div.stButton > button:first-child p,
+
         section[data-testid="stSidebar"] .st-key-register_new_client button p,
         section[data-testid="stSidebar"] .st-key-register_new_client div[data-testid="stMarkdownContainer"] {{
             width: 100% !important;
             text-align: center !important;
             justify-content: center !important;
+        }}
+
+        /* 사이드바 메뉴 버튼은 왼쪽 정렬 */
+        section[data-testid="stSidebar"] .st-key-side_nav_home button,
+        section[data-testid="stSidebar"] .st-key-side_nav_records button,
+        section[data-testid="stSidebar"] .st-key-side_nav_dashboard button,
+        section[data-testid="stSidebar"] .st-key-side_nav_report button,
+        section[data-testid="stSidebar"] .st-key-side_nav_chatbot button,
+        section[data-testid="stSidebar"] .st-key-side_nav_settings button {{
+            display: flex !important;
+            justify-content: flex-start !important;
+            align-items: center !important;
+            text-align: left !important;
+            padding-left: 0.9rem !important;
+            padding-right: 0.9rem !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-side_nav_home button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_records button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_dashboard button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_report button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_chatbot button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_settings button div[data-testid="stMarkdownContainer"] {{
+            width: 100% !important;
+            display: block !important;
+            text-align: left !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-side_nav_home button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_records button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_dashboard button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_report button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_chatbot button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_settings button p {{
+            width: 100% !important;
+            margin: 0 !important;
+            text-align: left !important;
         }}
 
         div[data-testid="stMetric"] {{
@@ -3084,18 +3216,24 @@ def apply_global_style():
             display: none;
         }}
 
+        div[data-testid="stMarkdownContainer"]:has(.chatbot-page-marker) {{
+            display: none !important;
+            height: 0 !important;
+        }}
+
         .main .block-container:has(.chatbot-page-marker) {{
-            height: 100vh !important;
-            overflow: hidden !important;
+            min-height: auto !important;
+            height: auto !important;
+            overflow: visible !important;
             padding-bottom: 0 !important;
         }}
 
         .main .block-container:has(.chatbot-page-marker) .chat-page-card {{
-            height: calc(100vh - 18.8rem) !important;
-            min-height: 320px !important;
+            height: 50vh !important;
+            min-height: 360px !important;
             overflow-y: auto !important;
-            padding-bottom: 1rem !important;
-            margin-bottom: 0.45rem !important;
+            padding-bottom: 4.2rem !important;
+            margin-bottom: 0.25rem !important;
             box-sizing: border-box !important;
         }}
 
@@ -3132,6 +3270,10 @@ def apply_global_style():
         div[data-testid="column"]:has(.chatbot-nav-button-marker) {{
             display: flex !important;
             justify-content: flex-end !important;
+        }}
+
+        .st-key-dashboard_chatbot_fab {{
+            transform: translateY(-0.95rem) !important;
         }}
 
         div[data-testid="column"]:has(.chatbot-nav-button-marker) div.stButton > button:first-child,
@@ -3241,8 +3383,8 @@ def apply_global_style():
 
         .home-summary-title {{
             color: #0F172A;
-            font-size: 1rem;
-            font-weight: 640;
+            font-size: 1.05rem;
+            font-weight: 580;
             letter-spacing: -0.035em;
             margin: 0.3rem 0 0.8rem;
         }}
@@ -3251,6 +3393,7 @@ def apply_global_style():
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 0.95rem;
+            margin-top: 1.25rem;
             margin-bottom: 1.05rem;
         }}
 
@@ -3266,19 +3409,19 @@ def apply_global_style():
         .home-summary-head {{
             display: flex;
             align-items: center;
-            gap: 0.75rem;
-            margin-bottom: 0.58rem;
+            gap: 0.62rem;
+            margin-bottom: 0.62rem;
         }}
 
         .home-summary-icon {{
-            width: 2.35rem;
-            height: 2.35rem;
-            border-radius: 12px;
+            width: 1.55rem;
+            height: 1.55rem;
+            border-radius: 10px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.05rem;
-            font-weight: 720;
+            font-size: 0.92rem;
+            font-weight: 700;
             flex-shrink: 0;
         }}
 
@@ -3304,32 +3447,39 @@ def apply_global_style():
 
         .home-summary-label {{
             color: #64748B;
-            font-size: 0.78rem;
-            font-weight: 560;
+            font-size: 0.85rem;
+            font-weight: 500;
             line-height: 1.35;
         }}
 
         .home-summary-value {{
             color: #0F172A;
-            font-size: 1.5rem;
-            font-weight: 680;
+            font-size: 1.90rem;
+            font-weight: 500;
             letter-spacing: -0.055em;
-            line-height: 1.15;
-            margin-left: 3.1rem;
+            line-height: 1.5;
+            margin-left: 2.0rem;
+            margin-top: 0.15rem;
         }}
 
         .home-summary-value.warning {{
             color: #0F172A;
-            font-size: 1.2rem;
-            font-weight: 680;
+            font-size: 1.55rem;
+            font-weight: 560;
+            letter-spacing: -0.055em;
+            line-height: 1.1;
+            margin-left: 2.0rem;
+            margin-top: 0.18rem;
         }}
 
         .home-summary-alert-text {{
             color: #EF4444;
-            font-size: 0.78rem;
+            font-size: 0.8rem;
             line-height: 1.45;
-            margin-top: 0.52rem;
-            font-weight: 540;
+            margin-top: 0.68rem;
+            margin-left: 2.0rem;
+            font-weight: 450;
+            letter-spacing: -0.025em;
         }}
 
         .home-recent-summary-card {{
@@ -3381,6 +3531,192 @@ def apply_global_style():
                 width: 100%;
             }}
         }} 
+        /* 신규 등록 버튼 색상만 수정 */
+        section[data-testid="stSidebar"] .st-key-register_new_client button {{
+            background: #FFFFFF !important;
+            border: 1px solid #BFDBFE !important;
+            color: #2563EB !important;
+            justify-content: center !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-register_new_client button p {{
+            color: #2563EB !important;
+            width: 100% !important;
+            text-align: center !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-register_new_client button div[data-testid="stMarkdownContainer"] {{
+            width: 100% !important;
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+            text-align: center !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-register_new_client button div[data-testid="stMarkdownContainer"] p {{
+            width: 100% !important;
+            margin: 0 auto !important;
+            text-align: center !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-register_new_client button:hover {{
+            background: #EFF6FF !important;
+            border-color: #93C5FD !important;
+            color: #1D4ED8 !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-register_new_client button:hover p {{
+            color: #1D4ED8 !important;
+        }}
+
+        .new-client-gender-marker {{
+            display: none;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.new-client-gender-marker) div[data-baseweb="select"] input,
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.new-client-gender-marker) div[data-baseweb="select"] input:focus {{
+            border: 0 !important;
+            box-shadow: none !important;
+            outline: 0 !important;
+            background: transparent !important;
+            color: transparent !important;
+            caret-color: transparent !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-new_client_name {{
+            margin-bottom: -0.9rem !important;
+        }}
+
+        /* 사이드바 내담자 검색창 - 검색 아이콘 */
+        .sidebar-search-input-marker {{
+            display: none;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.sidebar-search-input-marker) div[data-baseweb="input"] {{
+            position: relative !important;
+        }}
+
+        /* 사이드바 내담자 선택 검색창에만 search.png 아이콘 적용 */
+        .sidebar-search-input-marker {{
+            display: none;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-sidebar_client_search_box div[data-baseweb="input"] {{
+            position: relative !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-sidebar_client_search_box div[data-baseweb="input"]::before {{
+            content: "";
+            position: absolute;
+            left: 0.82rem;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 1rem;
+            height: 1rem;
+            background-image: url("{search_icon_data_uri}");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: contain;
+            z-index: 3;
+            pointer-events: none;
+            opacity: 0.55;
+            transition: opacity 0.12s ease;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-sidebar_client_search_box div[data-baseweb="input"]:focus-within::before {{
+            opacity: 0;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-sidebar_client_search_box input {{
+            padding-left: 2.15rem !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-sidebar_client_search_box div[data-baseweb="input"]:focus-within input {{
+            padding-left: 0.82rem !important;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.sidebar-search-input-marker) div[data-baseweb="input"]:focus-within::before {{
+            opacity: 0;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.sidebar-search-input-marker) input {{
+            padding-left: 2.15rem !important;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.sidebar-search-input-marker) div[data-baseweb="input"]:focus-within input {{
+            padding-left: 0.82rem !important;
+        }}
+
+        .sidebar-user-card {{
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            padding: 0;
+            border-radius: 0;
+            background: transparent;
+            border: 0;
+            margin-top: 0.7rem;
+        }}
+
+        .sidebar-user-avatar {{
+            width: 2.00rem;
+            height: 2.00rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            flex-shrink: 0;
+        }}
+
+        .sidebar-user-avatar img {{
+            width: 2.00rem;
+            height: 2.00rem;
+            object-fit: contain;
+            display: block;
+        }}
+
+        .sidebar-user-info {{
+            min-width: 0;
+        }}
+
+        .sidebar-user-name {{
+            color: #0F172A;
+            font-size: 0.8rem;
+            font-weight: 580;
+            line-height: 1.25;
+        }}
+
+        .sidebar-user-role {{
+            color: #64748B;
+            font-size: 0.70rem;
+            font-weight: 500;
+            margin-top: 0.12rem;
+        }}
+
+        /* 신규 등록 expander 내부 text_input만 왼쪽 정렬 */
+        section[data-testid="stSidebar"] .st-key-new_client_name div[data-baseweb="input"] input,
+        section[data-testid="stSidebar"] .st-key-new_client_age div[data-baseweb="input"] input,
+        section[data-testid="stSidebar"] .st-key-new_client_region div[data-baseweb="input"] input {{
+            text-align: left !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-new_client_name div[data-baseweb="input"] input::placeholder,
+        section[data-testid="stSidebar"] .st-key-new_client_age div[data-baseweb="input"] input::placeholder,
+        section[data-testid="stSidebar"] .st-key-new_client_region div[data-baseweb="input"] input::placeholder {{
+            text-align: left !important;
+        }}
+
+        /* 신규 등록 expander 내부 입력창 왼쪽 정렬 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) div[data-baseweb="input"] input {{
+            text-align: left !important;
+            padding-left: 0.82rem !important;
+        }}
+
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) div[data-baseweb="input"] input::placeholder {{
+            text-align: left !important;
+    }}
 
         </style>
         """,
@@ -3396,26 +3732,31 @@ def render_sidebar():
         st.markdown(
             """
             <div class="sidebar-brand">CounsHelper</div>
-            <div class="sidebar-subtitle">상담 기록 분석 v0.9</div>
-            <div class="sidebar-profile-text">
-                <div style="color:#64748B; font-size:0.82rem; margin-bottom:0.2rem;">MVP Demo</div>
-                <strong>상담심리사 (데모)</strong>
-            </div>
+            <div class="sidebar-subtitle">상담 분석·보고서 자동화</div>
             """,
             unsafe_allow_html=True,
         )
 
-        st.divider()
 
         st.markdown('<div class="sidebar-section-title">내담자 선택</div>', unsafe_allow_html=True)
 
-        search_query = st.text_input(
-            "내담자 검색",
-            value=st.session_state.get("client_search", ""),
-            placeholder="alias / 성별 / 지역 / 메모",
-            label_visibility="collapsed",
-            key="client_search_input",
-        )
+        if st.session_state.pop("clear_client_search_input", False):
+            st.session_state.clear_client_search_input = True
+            st.session_state.client_search = ""
+
+        search_input_key = f"client_search_input_{st.session_state.get('client_search_nonce', 0)}"
+
+        with st.container(key="sidebar_client_search_box"):
+            st.markdown('<span class="sidebar-search-input-marker"></span>', unsafe_allow_html=True)
+
+            search_query = st.text_input(
+                "내담자 검색",
+                value=st.session_state.get("client_search", ""),
+                placeholder="이름 / 내담자ID / 성별 / 지역",
+                label_visibility="collapsed",
+                key=search_input_key,
+            )
+
         st.session_state.client_search = search_query
 
         filtered_clients = CLIENTS.copy()
@@ -3435,49 +3776,87 @@ def render_sidebar():
                 return any(query in str(value).lower() for value in values)
 
             filtered_clients = filtered_clients[filtered_clients.apply(matches_client, axis=1)]
-
-        client_options = filtered_clients["내담자 ID"].tolist() if not filtered_clients.empty else []
-
-        if not client_options:
-            st.warning("검색 결과가 없습니다.")
-            selected_client_id = st.session_state.selected_client
         else:
-            if st.session_state.selected_client in client_options:
-                default_index = client_options.index(st.session_state.selected_client)
-            else:
-                default_index = 0
+            filtered_clients = filtered_clients.iloc[0:0]
 
-            selected_client_id = st.selectbox(
-                "내담자",
-                options=client_options,
-                format_func=lambda client_id: _format_sidebar_client_label(client_id),
-                index=default_index,
-                label_visibility="collapsed",
+        if st.session_state.get("show_selected_client_label", False):
+            current_client_label = _format_sidebar_client_label(st.session_state.selected_client)
+
+            st.markdown(
+                f"""
+                <div style="
+                    color:#64748B;
+                    font-size:0.76rem;
+                    line-height:1.45;
+                    margin:0.45rem 0 0.55rem;
+                ">
+                    현재 선택: <span style="color:#0F172A; font-weight:560;">{html_escape(current_client_label)}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-        if selected_client_id != st.session_state.selected_client:
-            st.session_state.selected_client = selected_client_id
-            client_sessions = SESSIONS[SESSIONS["내담자 ID"] == selected_client_id]
+        if search_query.strip():
+            if filtered_clients.empty:
+                st.caption("검색 결과가 없습니다.")
+            else:
+                st.markdown(
+                    """
+                    <div style="
+                        color:#64748B;
+                        font-size:0.74rem;
+                        font-weight:520;
+                        margin:0.35rem 0 0.35rem;
+                    ">
+                        검색 결과
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-            if not client_sessions.empty:
-                selected_session = client_sessions.iloc[0]["회기"]
-                st.session_state.selected_session = selected_session
-                st.session_state.record_mode = "existing"
+                for _, client in filtered_clients.head(6).iterrows():
+                    client_id = str(client["내담자 ID"])
+                    client_label = _format_sidebar_client_label(client_id)
 
-                key = (selected_client_id, selected_session)
+                    if st.button(
+                        client_label,
+                        key=f"sidebar_client_result_{client_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.selected_client = client_id
+                        st.session_state.client_search = ""
+                        st.session_state.client_search_nonce = st.session_state.get("client_search_nonce", 0) + 1
+                        st.session_state.show_selected_client_label = True
+                        st.session_state.patient_home_tab = "내담자 정보"
 
-                if key in SESSION_DIALOGUES:
-                    st.session_state.dialogue_rows = SESSION_DIALOGUES[key].copy()
-                else:
-                    st.session_state.dialogue_rows = DEFAULT_DIALOGUE.copy()
+                        client_sessions = SESSIONS[SESSIONS["내담자 ID"] == client_id]
 
-            st.session_state.analysis_result = None
-            st.rerun()
+                        if not client_sessions.empty:
+                            selected_session = client_sessions.iloc[0]["회기"]
+                            st.session_state.selected_session = selected_session
+                            st.session_state.record_mode = "existing"
+
+                            dialogue_key = (client_id, selected_session)
+
+                            if dialogue_key in SESSION_DIALOGUES:
+                                st.session_state.dialogue_rows = SESSION_DIALOGUES[dialogue_key].copy()
+                            else:
+                                st.session_state.dialogue_rows = DEFAULT_DIALOGUE.copy()
+                        else:
+                            st.session_state.selected_session = "새 상담"
+                            st.session_state.record_mode = "new"
+                            st.session_state.dialogue_rows = DEFAULT_DIALOGUE.copy()
+
+                        st.session_state.analysis_result = None
+                        go_page("내담자 홈")
+                        st.rerun()
 
         with st.expander("신규 등록", expanded=False):
-            new_client_name = st.text_input("이름/alias", placeholder="예: C-005", key="new_client_name")
+            st.markdown('<span class="new-client-expander-marker"></span>', unsafe_allow_html=True)
+            new_client_name = st.text_input("이름", placeholder="예: 안녕", key="new_client_name")
+            st.markdown('<span class="new-client-gender-marker"></span>', unsafe_allow_html=True)
             new_client_gender = st.selectbox("성별", ["여성", "남성", "기타/미상"], key="new_client_gender")
-            new_client_age = st.text_input("연령대 또는 연령", placeholder="예: 30대 또는 32", key="new_client_age")
+            new_client_age = st.text_input("연령", placeholder="예: 30대 또는 32", key="new_client_age")
             new_client_region = st.text_input("지역", placeholder="예: 서울", key="new_client_region")
 
             st.markdown('<span class="register-client-button-marker"></span>', unsafe_allow_html=True)
@@ -3503,6 +3882,7 @@ def render_sidebar():
             ("챗봇", "챗봇", "side_nav_chatbot"),
         ]
 
+
         for label, page_name, key in nav_items:
             active = st.session_state.page == page_name
 
@@ -3515,10 +3895,23 @@ def render_sidebar():
                 go_page(page_name)
                 st.rerun()
 
-        st.markdown("<div style='height: 2.4rem;'></div>", unsafe_allow_html=True)
-        st.divider()
+        st.markdown("<div style='height: 3.8rem;'></div>", unsafe_allow_html=True)
 
-        st.button("설정", key="side_nav_settings", use_container_width=True, disabled=True)
+        profile_icon_data_uri = get_png_data_uri(PROFILE_ICON_PATH)        
+        st.markdown(
+            f"""
+            <div class="sidebar-user-card">
+                <div class="sidebar-user-avatar">
+                    <img src="{profile_icon_data_uri}" alt="profile" />
+                </div>
+                <div class="sidebar-user-info">
+                    <div class="sidebar-user-name">상담심리사</div>
+                    <div class="sidebar-user-role">MVP Demo</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # =========================================================
@@ -3841,10 +4234,9 @@ def render_patient_home():
 
     risk_class, risk_text = _get_client_risk_signal(client_sessions)
 
-    st.markdown('<div class="patient-kicker">‹ 내담자 관리</div>', unsafe_allow_html=True)
     st.markdown('<div class="patient-title">내담자 홈</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="patient-desc">최근 상담 흐름과 AI 분석 결과를 확인하고 다음 회기를 준비할 수 있습니다.</div>',
+        '<div class="patient-desc">내담자의 상담 요약과 최근 회기 흐름을 확인합니다.</div>',
         unsafe_allow_html=True,
     )
 
@@ -3888,7 +4280,6 @@ def render_patient_home():
     if active_tab == "내담자 정보":
         risk_value = "확인 필요" if risk_class == "risk-alert" else "없음"
 
-        st.markdown('<div class="home-summary-title">상담 요약</div>', unsafe_allow_html=True)
 
         st.markdown(
             f"""<div class="home-summary-grid">
@@ -3944,26 +4335,12 @@ def render_patient_home():
 
     else:
         st.markdown('<div class="home-summary-title">상담 회기 목록</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="page-desc" style="margin-bottom:0.5rem;">회기별 기록과 분석 상태를 확인할 수 있습니다.</div>',
-            unsafe_allow_html=True,
-        )
 
         if client_sessions.empty:
             st.info("등록된 상담 내역이 없습니다. 상담내역 기록·추가에서 새 상담을 입력해 주세요.")
         else:
             for _, row in client_sessions.iterrows():
                 render_session_list_card(row, key_prefix="home")
-                st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
-
-            st.markdown(
-                """
-                <div style="color:#64748B; font-size:0.82rem; margin-top:0.2rem;">
-                    회기를 클릭하면 상세 내용을 확인할 수 있습니다.
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
 
 
 def _build_session_summary_text(session_row: pd.Series, script: str) -> str:
@@ -4092,26 +4469,26 @@ def render_session_detail():
             "메모",
             value=current_note,
             height=340,
-            placeholder="다음 회기에서 확인할 내용, 보호요인, 위험 신호, 상담사 관찰 메모를 적어두세요.",
+            placeholder="다음 회기 확인사항, 위험 신호, 보호요인, 상담사 관찰 메모를 입력하세요.",
             label_visibility="collapsed",
             key=f"session_note_input_{note_key}",
         )
         st.session_state.session_notes[note_key] = note_value
-        st.caption("현재 메모는 앱 세션 동안 임시 보관됩니다.")
 
 
 # =========================================================
 # 13. 상담내역 기록·추가 화면
 # =========================================================
 def render_session_cards():
-    header_col, add_col = st.columns([0.82, 0.18], vertical_alignment="center")
+    header_col, add_col = st.columns([0.82, 0.18], vertical_alignment="top")
 
     with header_col:
-        st.markdown('<div class="patient-title">상담내역</div>', unsafe_allow_html=True)
+        st.markdown('<div class="patient-title">상담내역 기록·추가</div>', unsafe_allow_html=True)
         st.markdown(
-            '<div class="patient-desc">상담 회기별 기록과 분석 상태를 확인하고, 새 상담 내역을 추가할 수 있습니다.</div>',
+            '<div class="patient-desc">회기별 상담 기록을 확인하고 새 상담 내역을 추가합니다.</div>',
             unsafe_allow_html=True,
-        )
+        )    
+
 
     with add_col:
         if st.button("+ 새 상담 추가", key="add_new_session_top", use_container_width=True, type="primary"):
@@ -4135,7 +4512,6 @@ def render_session_cards():
 
     for _, row in client_sessions.iterrows():
         render_session_list_card(row, key_prefix="record")
-        st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
 
     st.markdown(
         """
@@ -4162,10 +4538,10 @@ def render_new_session_form():
     if "new_session_input_mode" not in st.session_state:
         st.session_state.new_session_input_mode = "발화 단위 입력"
 
-    title_col, list_col = st.columns([0.82, 0.18], vertical_alignment="center")
+    title_col, list_col = st.columns([0.82, 0.18], vertical_alignment="top")
 
     with title_col:
-        st.markdown('<div class="patient-title">새 상담 내역 추가</div>', unsafe_allow_html=True)
+        st.markdown('<div class="patient-title">상담내역 기록·추가</div>', unsafe_allow_html=True)
         
 
     with list_col:
@@ -4368,7 +4744,7 @@ def render_dashboard():
     client_name = get_client_display_name(client_row)
     client_sessions = get_client_sessions_sorted()
 
-    title_col, chat_col = st.columns([0.88, 0.12], vertical_alignment="center")
+    title_col, chat_col = st.columns([0.88, 0.12], vertical_alignment="top")
 
     with title_col:
         st.markdown('<div class="patient-title">분석 대시보드</div>', unsafe_allow_html=True)
@@ -5010,7 +5386,7 @@ def render_report():
 
 
     download_spacer, md_col, pdf_col, docx_col = st.columns(
-        [0.46, 0.18, 0.18, 0.18],
+        [0.52, 0.16, 0.16, 0.16],
         gap="small",
     )
 
@@ -5076,6 +5452,47 @@ def render_quick_question_buttons():
                 add_mock_answer(question)
                 st.rerun()
 
+def scroll_chat_to_bottom():
+    nonce = st.session_state.get("chat_scroll_nonce", 0)
+
+    components.html(
+        f"""
+        <script>
+        const scrollNonce = {nonce};
+
+        function scrollToChatBottom() {{
+            const parentDoc = window.parent.document;
+            const chatBox =
+                parentDoc.getElementById("chat-page-card") ||
+                parentDoc.querySelector('[data-chat-scroll-box="true"]');
+
+            if (chatBox) {{
+                chatBox.scrollTop = chatBox.scrollHeight;
+
+                const anchor = chatBox.querySelector("#chat-bottom-anchor");
+
+                if (anchor) {{
+                    anchor.scrollIntoView({{
+                        behavior: "auto",
+                        block: "end"
+                    }});
+                }}
+
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }}
+        }}
+
+        window.requestAnimationFrame(scrollToChatBottom);
+        setTimeout(scrollToChatBottom, 0);
+        setTimeout(scrollToChatBottom, 40);
+        setTimeout(scrollToChatBottom, 160);
+        setTimeout(scrollToChatBottom, 360);
+        setTimeout(scrollToChatBottom, 700);
+        setTimeout(scrollToChatBottom, 1100);
+        </script>
+        """,
+        height=1,
+    )
 
 def render_chatbot():
     st.markdown('<span class="chatbot-page-marker"></span>', unsafe_allow_html=True)
@@ -5083,7 +5500,7 @@ def render_chatbot():
 
     with header_text_col:
         st.markdown(
-            '<div class="patient-title">상담 보조 챗봇</div>',
+            '<div class="patient-title">챗봇</div>',
             unsafe_allow_html=True,
         )
         st.markdown(
@@ -5200,6 +5617,7 @@ def render_chatbot():
                 "time": now_time_label(),
             }
         )
+        st.session_state.chat_scroll_nonce = st.session_state.get("chat_scroll_nonce", 0) + 1
 
         return True
 
@@ -5245,8 +5663,9 @@ def render_chatbot():
 
     st.markdown(
         f"""
-        <div class="chat-page-card">
+        <div id="chat-page-card" class="chat-page-card" data-chat-scroll-box="true" style="height:50vh; min-height:360px; overflow-y:auto; padding-bottom:4.2rem; box-sizing:border-box;">
             {messages_html}
+            <div id="chat-bottom-anchor"></div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -5295,8 +5714,9 @@ def render_chatbot():
             send_clicked = st.button(send_icon_label, key="chatbot_send", use_container_width=True, help="전송")
 
     if send_clicked and submit_chat_question(user_question):
-        st.session_state.clear_chatbot_input = True
         st.rerun()
+
+    scroll_chat_to_bottom()
 
 # =========================================================
 # 16. Main
@@ -5322,4 +5742,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
