@@ -64,3 +64,9 @@ hf-space-remote/
 
 data/processed/*
 !data/processed/.gitkeep
+
+!data/references/
+!data/references/**
+
+!chroma_db/
+!chroma_db/**
