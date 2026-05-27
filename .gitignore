@@ -67,3 +67,6 @@ data/processed/*
 
 !data/references/
 !data/references/**
+
+!chroma_db/
+!chroma_db/**
