@@ -49,90 +49,157 @@ CONTEXT_TO_DISEASE = {
 # 4. HIRA 매칭 함수
 # =========================
 
+from pathlib import Path
+import pandas as pd
+
+
+def _load_hira_df():
+    project_root = Path(__file__).resolve().parents[1]
+    path = project_root / "data" / "processed" / "hira" / "hira_model_context.csv"
+    df = pd.read_csv(path, encoding="utf-8-sig")
+
+    for col in ["disease", "sido", "sigungu", "gender", "age_group", "context_key"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+
+    if "context_key" not in df.columns:
+        disease_to_context_key = {
+            "우울증": "depression",
+            "불안장애": "anxiety",
+            "불면증": "sleep",
+            "ADHD": "adhd",
+            "조울증": "bipolar",
+            "조현병": "schizophrenia",
+        }
+        df["context_key"] = df["disease"].map(disease_to_context_key).fillna("etc")
+
+    df["gender"] = df["gender"].replace(
+        {
+            "남자": "남",
+            "남성": "남",
+            "여자": "여",
+            "여성": "여",
+        }
+    )
+
+    return df
+
+
+def infer_hira_context_keys(result):
+    classification = result.get("classification", {})
+    factors = result.get("factors", {})
+
+    keys = []
+
+    if int(classification.get("depression", 0)) == 1:
+        keys.append("depression")
+
+    if int(classification.get("anxiety", 0)) == 1:
+        keys.append("anxiety")
+
+    # 수면문제는 우울/불안의 보조 설명 항목으로만 추가
+    if int(factors.get("sleep_disturbance", 0) or 0) > 0:
+        keys.append("sleep")
+
+    # 중독은 HIRA 주요 정신질환 ZIP에 직접 대응되는 질환명이 없으므로 여기서는 제외
+    return list(dict.fromkeys(keys))
+
 def get_hira_context(
-    gender: str,
-    sido: str,
-    sigungu: str,
-    context_keys: list[str],
-    year: int = 2024,
-    age: int | None = None,
-    age_group: str | None = None,
+    gender,
+    sido,
+    sigungu,
+    age_group,
+    context_keys,
 ):
-    """
-    내담자 메타데이터와 상담 분석 결과를 기준으로 HIRA 통계를 찾는다.
-
-    Parameters
-    ----------
-    age : int
-        내담자 나이
-    gender : str
-        성별. 예: "남", "여"
-    sido : str
-        시도. 예: "서울"
-    sigungu : str
-        시군구. 예: "강남구"
-    context_keys : list[str]
-        찾고 싶은 질환 키. 예: ["depression", "sleep"]
-    year : int
-        기준 연도. 기본값 2024
-
-    Returns
-    -------
-    list[dict]
-        HIRA 매칭 결과 목록
-    """
-
-    df = pd.read_csv(HIRA_PATH, encoding="utf-8-sig")
-
-    if age_group is None:
-        if age is None:
-            raise ValueError("age 또는 age_group 중 하나는 반드시 입력해야 합니다.")
-        age_group = age_to_age_group(age)
+    df = _load_hira_df()
 
     results = []
 
     for key in context_keys:
-        disease = CONTEXT_TO_DISEASE.get(key)
+        base = df[df["context_key"] == key].copy()
 
-        if disease is None:
-            continue
-
-        matched = df[
-            (df["year"] == year)
-            & (df["sido"] == sido)
-            & (df["sigungu"] == sigungu)
-            & (df["gender"] == gender)
-            & (df["age_group"] == age_group)
-            & (df["context_key"] == key)
+        exact = base[
+            (base["gender"] == gender)
+            & (base["sido"] == sido)
+            & (base["sigungu"] == sigungu)
+            & (base["age_group"] == age_group)
         ]
 
-        if matched.empty:
-            results.append({
-                "context_key": key,
-                "disease": disease,
-                "matched": False,
-                "message": "일치하는 HIRA 통계를 찾지 못했습니다.",
-            })
+        if exact.empty:
+            # 시군구가 안 맞으면 시도 단위로 fallback
+            exact = base[
+                (base["gender"] == gender)
+                & (base["sido"] == sido)
+                & (base["age_group"] == age_group)
+            ]
+
+            if not exact.empty:
+                exact = (
+                    exact.groupby(["year", "disease", "sido", "gender", "age_group", "context_key"], as_index=False)
+                    .agg(
+                        {
+                            "patients": "sum",
+                            "visit_days": "sum",
+                            "cost": "sum",
+                        }
+                    )
+                )
+                exact["sigungu"] = "시도 전체"
+
+        if exact.empty:
+            # 그래도 없으면 전국 단위 fallback
+            exact = base[
+                (base["gender"] == gender)
+                & (base["age_group"] == age_group)
+            ]
+
+            if not exact.empty:
+                exact = (
+                    exact.groupby(["year", "disease", "gender", "age_group", "context_key"], as_index=False)
+                    .agg(
+                        {
+                            "patients": "sum",
+                            "visit_days": "sum",
+                            "cost": "sum",
+                        }
+                    )
+                )
+                exact["sido"] = "전국"
+                exact["sigungu"] = "전국"
+
+        if exact.empty:
+            results.append(
+                {
+                    "matched": False,
+                    "context_key": key,
+                    "message": f"{key} 조건에 맞는 HIRA 통계를 찾지 못했습니다.",
+                }
+            )
             continue
 
-        row = matched.iloc[0]
+        row = exact.iloc[0]
 
-        results.append({
-            "context_key": key,
-            "disease": row["disease"],
-            "matched": True,
-            "year": int(row["year"]),
-            "sido": row["sido"],
-            "sigungu": row["sigungu"],
-            "gender": row["gender"],
-            "age_group": row["age_group"],
-            "patients": int(row["patients"]),
-            "visit_days": int(row["visit_days"]),
-            "cost": int(row["cost"]),
-            "visit_days_per_patient": row["visit_days_per_patient"],
-            "cost_per_patient": row["cost_per_patient"],
-            "is_suppressed_or_zero": bool(row["is_suppressed_or_zero"]),
-        })
+        patients = int(row.get("patients", 0))
+        visit_days = int(row.get("visit_days", 0))
+        cost = int(row.get("cost", 0))
+
+        results.append(
+            {
+                "matched": True,
+                "context_key": key,
+                "year": int(row.get("year", 2024)),
+                "disease": row.get("disease", ""),
+                "sido": row.get("sido", ""),
+                "sigungu": row.get("sigungu", ""),
+                "gender": row.get("gender", ""),
+                "age_group": row.get("age_group", ""),
+                "patients": patients,
+                "visit_days": visit_days,
+                "cost": cost,
+                "visit_days_per_patient": visit_days / patients if patients > 0 else None,
+                "cost_per_patient": cost / patients if patients > 0 else None,
+            }
+        )
 
     return results
 
