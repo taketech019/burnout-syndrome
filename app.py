@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Tuple
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -1525,16 +1526,256 @@ def get_factor_groups(factors: Dict[str, int]) -> Dict[str, int]:
 
     return groups
 
+# =========================================================
+# HIRA 대시보드 보조 함수
+# =========================================================
+HIRA_DISEASE_GROUPS = {
+    "depression": {
+        "label": "우울",
+        "keywords": ["우울"],
+    },
+    "anxiety": {
+        "label": "불안",
+        "keywords": ["불안", "공황"],
+    },
+    "addiction": {
+        "label": "중독",
+        "keywords": ["중독", "알코올", "물질", "약물", "도박", "의존"],
+    },
+}
 
+
+def _get_positive_context_keys(classification: Dict[str, int]) -> List[str]:
+    """
+    KlueBERT 예측 결과에서 양성으로 나온 우울/불안/중독 key만 반환한다.
+    """
+    return [
+        key
+        for key in ["depression", "anxiety", "addiction"]
+        if int(classification.get(key, 0) or 0) == 1
+    ]
+
+
+def _get_display_context_keys(
+    classification: Dict[str, int],
+    include_negative: bool = False,
+) -> List[str]:
+    """
+    기본: KlueBERT 양성 항목만 표시
+    include_negative=True: 음성 항목까지 함께 표시
+    """
+    positive_keys = _get_positive_context_keys(classification)
+
+    if include_negative:
+        return ["depression", "anxiety", "addiction"]
+
+    return positive_keys
+
+
+def _normalize_hira_dataframe(hira_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    HIRA 데이터 컬럼 타입과 성별 표기를 화면 처리용으로 정리한다.
+    """
+    df = hira_df.copy()
+
+    for col in ["disease", "gender", "age_group", "sido", "sigungu"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+
+    if "gender" in df.columns:
+        df["gender"] = df["gender"].replace(
+            {
+                "남자": "남",
+                "남성": "남",
+                "여자": "여",
+                "여성": "여",
+            }
+        )
+
+    for col in ["year", "patients", "visit_days", "visit_days_per_patient", "cost_per_patient"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if "context_key" not in df.columns:
+        df["context_key"] = df["disease"].apply(_infer_hira_context_key_from_disease)
+    else:
+        df["context_key"] = df["context_key"].fillna("").astype(str).str.strip()
+        missing_mask = df["context_key"].eq("") | df["context_key"].eq("nan")
+        df.loc[missing_mask, "context_key"] = df.loc[missing_mask, "disease"].apply(
+            _infer_hira_context_key_from_disease
+        )
+
+    return df
+
+
+def _infer_hira_context_key_from_disease(disease: Any) -> str:
+    """
+    질환명 문자열에서 우울/불안/중독 분류를 추정한다.
+    """
+    disease_text = str(disease or "")
+
+    for context_key, meta in HIRA_DISEASE_GROUPS.items():
+        if any(keyword in disease_text for keyword in meta["keywords"]):
+            return context_key
+
+    return "etc"
+
+
+def _get_client_hira_filter_values() -> Tuple[str, str]:
+    """
+    현재 선택된 내담자의 성별·연령대를 HIRA 데이터 형식으로 변환한다.
+    """
+    client_row = get_client_row()
+
+    raw_gender = str(client_row.get("성별", "")).strip()
+    gender = "여" if raw_gender.startswith("여") else "남"
+
+    age_band_map = {
+        "0대": "0~9세",
+        "10대": "10~19세",
+        "20대": "20~29세",
+        "30대": "30~39세",
+        "40대": "40~49세",
+        "50대": "50~59세",
+        "60대": "60~69세",
+        "70대": "70~79세",
+        "80대": "80~89세",
+        "90대": "90~99세",
+    }
+
+    age_group = age_band_map.get(str(client_row.get("연령대", "")).strip(), "30~39세")
+
+    return gender, age_group
+
+
+def build_client_hira_dataframe(
+    classification: Dict[str, int],
+    include_negative: bool = False,
+) -> pd.DataFrame:
+    """
+    건강보험심사평가원_시군구별 성별 연령별 주요 정신질환 통계 2024 기반으로
+    현재 내담자의 성별·연령대에 맞는 우울/불안/중독 관련 데이터를 정리한다.
+
+    기본값:
+    - KlueBERT 양성 항목만 반환
+    - include_negative=True이면 음성 항목도 함께 반환
+    """
+    hira_df = _normalize_hira_dataframe(load_hira_model_context())
+
+    gender, age_group = _get_client_hira_filter_values()
+    display_context_keys = _get_display_context_keys(classification, include_negative)
+
+    if not display_context_keys:
+        return pd.DataFrame()
+
+    target = hira_df[
+        (hira_df["gender"] == gender)
+        & (hira_df["age_group"] == age_group)
+        & (hira_df["context_key"].isin(display_context_keys))
+    ].copy()
+
+    if target.empty:
+        return target
+
+    # 2024 데이터 우선 사용. 2024가 없으면 가장 최신 연도 사용.
+    if "year" in target.columns:
+        if 2024 in target["year"].dropna().astype(int).tolist():
+            target = target[target["year"] == 2024]
+        else:
+            latest_year = target["year"].dropna().max()
+            target = target[target["year"] == latest_year]
+
+    target["질환군"] = target["context_key"].map(
+        {key: value["label"] for key, value in HIRA_DISEASE_GROUPS.items()}
+    )
+
+    target["판별상태"] = target["context_key"].apply(
+        lambda key: "양성" if int(classification.get(key, 0) or 0) == 1 else "음성"
+    )
+
+    return target
+
+
+def build_hira_summary_dataframe(
+    classification: Dict[str, int],
+    include_negative: bool = False,
+) -> pd.DataFrame:
+    """
+    증상별 입내원 KPI 카드와 HIRA 진료 현황 차트에 사용할 요약 데이터 생성.
+    """
+    target = build_client_hira_dataframe(
+        classification=classification,
+        include_negative=include_negative,
+    )
+
+    if target.empty:
+        return pd.DataFrame()
+
+    agg_dict = {}
+
+    if "patients" in target.columns:
+        agg_dict["patients"] = "sum"
+
+    if "visit_days" in target.columns:
+        agg_dict["visit_days"] = "sum"
+
+    if "cost_per_patient" in target.columns:
+        agg_dict["cost_per_patient"] = "mean"
+
+    if not agg_dict:
+        return pd.DataFrame()
+
+    summary_df = (
+        target.groupby(["context_key", "질환군", "disease", "판별상태"], as_index=False)
+        .agg(agg_dict)
+        .sort_values(["판별상태", "patients"], ascending=[False, False])
+    )
+
+    if "patients" not in summary_df.columns:
+        summary_df["patients"] = 0
+
+    if "visit_days" not in summary_df.columns:
+        summary_df["visit_days"] = 0
+
+    summary_df["visit_days_per_patient_calc"] = summary_df.apply(
+        lambda row: float(row["visit_days"]) / float(row["patients"])
+        if float(row.get("patients", 0) or 0) > 0
+        else None,
+        axis=1,
+    )
+
+    return summary_df
+
+
+def format_number(value: Any, suffix: str = "") -> str:
+    try:
+        return f"{float(value):,.0f}{suffix}"
+    except Exception:
+        return f"계산 불가{suffix}"
+
+
+def format_float(value: Any, suffix: str = "") -> str:
+    try:
+        return f"{float(value):,.2f}{suffix}"
+    except Exception:
+        return f"계산 불가{suffix}"
+
+
+def format_money(value: Any) -> str:
+    try:
+        return f"{float(value):,.0f}원"
+    except Exception:
+        return "계산 불가"
+    
 def render_top_risk_cards(classification: Dict[str, int], factors: Dict[str, int]):
     """
-    우울/불안/중독/자해·자살 KPI를 표시한다.
-    상담사 검토는 별도 행으로 표시한다.
+    KlueBERT 우울/불안/중독 예측값 KPI 카드 복원.
+    사진 배치의 상단 공통 영역 역할.
     """
 
-    depression_label = int(classification.get("depression", 0))
-    anxiety_label = int(classification.get("anxiety", 0))
-    addiction_label = int(classification.get("addiction", 0))
+    depression_label = int(classification.get("depression", 0) or 0)
+    anxiety_label = int(classification.get("anxiety", 0) or 0)
+    addiction_label = int(classification.get("addiction", 0) or 0)
     suicidal_label = 1 if int(factors.get("suicidal", 0) or 0) > 0 else 0
 
     review_required = (
@@ -1544,8 +1785,8 @@ def render_top_risk_cards(classification: Dict[str, int], factors: Dict[str, int
         or suicidal_label == 1
     )
 
-    # 1행: KPI 4개
-    c1, c2, c3, c4 = st.columns(4)
+    st.markdown("### KlueBERT 예측 결과")
+    st.caption("우울·불안·중독 0/1 판별 결과와 자해·자살 관련 발화 확인 여부를 표시합니다.")
 
     kpi_values = [
         {
@@ -1568,8 +1809,8 @@ def render_top_risk_cards(classification: Dict[str, int], factors: Dict[str, int
         },
         {
             "title": "자해·자살",
-            "value": "양성" if suicidal_label == 1 else "음성",
-            "delta": "모델 출력 1" if suicidal_label == 1 else "모델 출력 0",
+            "value": "확인 필요" if suicidal_label == 1 else "미표시",
+            "delta": "요인 점수 > 0" if suicidal_label == 1 else "요인 점수 0",
             "class": "soft-card-green",
         },
     ]
@@ -1589,85 +1830,78 @@ def render_top_risk_cards(classification: Dict[str, int], factors: Dict[str, int
                 unsafe_allow_html=True,
             )
 
-    # 2행: 상담사 검토
-    with st.container(border=True):
-        review_text = "확인 필요" if review_required else "일반 확인"
+    st.markdown("<div style='height:0.7rem;'></div>", unsafe_allow_html=True)
 
-        st.markdown(
-            f"""
-            <div class="clean-card" style="margin-top:0.8rem;">
-                <div style="font-size:1.02rem; font-weight:750; color:#0F172A;">
-                    상담사 검토: {review_text}
-                    <span class="status-help"
-                        title="주의: 우울·불안·중독·자해·자살 표시는 모델과 라벨 기반 참고값이며, 임상 진단 또는 최종 위험도 판단을 의미하지 않습니다.">
-                        ?
-                    </span>
-                </div>
+    if review_required:
+        review_text = "확인 필요"
+        review_color = "#9A3412"
+        review_bg = "#FFF7ED"
+        review_border = "#FDBA74"
+    else:
+        review_text = "일반 확인"
+        review_color = "#047857"
+        review_bg = "#ECFDF5"
+        review_border = "#A7F3D0"
+
+    st.markdown(
+        f"""
+        <div style="
+            background:{review_bg};
+            border:1px solid {review_border};
+            border-radius:1rem;
+            padding:0.95rem 1.1rem;
+            margin-bottom:0.6rem;
+            box-shadow:0 6px 18px rgba(15,23,42,0.04);
+        ">
+            <div style="font-size:1.02rem; font-weight:760; color:{review_color};">
+                상담사 검토: {review_text}
+                <span class="status-help"
+                    title="주의: 우울·불안·중독·자해·자살 표시는 모델과 라벨 기반 참고값이며, 임상 진단 또는 최종 위험도 판단을 의미하지 않습니다.">
+                    ?
+                </span>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        if st.button("상세 사유 확인", use_container_width=True, key="show_review_reason_btn"):
-            st.session_state["show_review_reason"] = not st.session_state.get("show_review_reason", False)
+    with st.expander("상세 사유 확인", expanded=False):
+        reason_keys = [
+            "depressive_mood",
+            "sleep_disturbance",
+            "fatigue",
+            "anhedonia",
+            "worthlessness",
+            "impaired_cognition",
+            "anxiety",
+            "physical_symptom",
+            "loss_of_control",
+            "social_avoidance",
+            "craving",
+            "withdrawal",
+            "tolerance",
+            "social_problem",
+            "suicidal",
+        ]
 
-        if st.session_state.get("show_review_reason", False):
-            reason_keys = [
-                "depressive_mood",
-                "sleep_disturbance",
-                "fatigue",
-                "anhedonia",
-                "worthlessness",
-                "impaired_cognition",
-                "anxiety",
-                "physical_symptom",
-                "loss_of_control",
-                "social_avoidance",
-                "craving",
-                "withdrawal",
-                "tolerance",
-                "social_problem",
-                "suicidal",
-            ]
+        reason_rows = []
 
-            reason_rows = []
+        for key in reason_keys:
+            score = int(factors.get(key, 0) or 0)
 
-            for key in reason_keys:
-                score = int(factors.get(key, 0) or 0)
-
-                if score > 0:
-                    reason_rows.append(
-                        {
-                            "요인": FACTOR_LABELS.get(key, key),
-                            "점수": score,
-                        }
-                    )
-
-            st.divider()
-            st.markdown("#### 주요 요인 점수 해석")
-
-            if not reason_rows:
-                st.info("현재 0보다 큰 주요 요인 점수가 없습니다.")
-            else:
-                reason_df = pd.DataFrame(reason_rows).sort_values("점수", ascending=False)
-                top_items = reason_df.head(5).to_dict(orient="records")
-
-                top_text = ", ".join(
-                    [f"{item['요인']} {item['점수']}점" for item in top_items]
+            if score > 0:
+                reason_rows.append(
+                    {
+                        "요인": FACTOR_LABELS.get(key, key),
+                        "점수": score,
+                    }
                 )
 
-                st.markdown(
-                    f"""
-                    현재 상담 기록에서 주요하게 표시된 요인은 **{top_text}**입니다.
-
-                    이 값은 임상 진단 점수가 아니라, 상담 발화에서 특정 요인이 어느 정도 탐지되었는지 보여주는
-                    모델 기반 참고값입니다. 상담자는 이 결과를 바탕으로 실제 호소의 지속 기간, 일상 기능 저하,
-                    위험요인 여부, 보호요인 여부를 추가 확인해야 합니다.
-                    """
-                )
-
-                st.dataframe(reason_df, use_container_width=True, hide_index=True)
-
+        if not reason_rows:
+            st.info("현재 0보다 큰 주요 요인 점수가 없습니다.")
+        else:
+            reason_df = pd.DataFrame(reason_rows).sort_values("점수", ascending=False)
+            st.dataframe(reason_df, use_container_width=True, hide_index=True)
 
 def render_hira_reference_card(result: Dict[str, Any], key_prefix: str = "ref_hira"):
     """
@@ -1823,63 +2057,123 @@ def render_hira_reference_card(result: Dict[str, Any], key_prefix: str = "ref_hi
     return hira_results
 
 
-def render_hira_report_sentence_card(hira_results: List[Dict[str, Any]]):
+def render_hira_report_sentence_card(
+    classification: Dict[str, int],
+    include_negative: bool = False,
+):
     """
-    HIRA 매칭 결과를 증상별 입내원정보 카드로 표시한다.
+    증상별 입내원정보를 텍스트 대신 카드형 KPI + 조건부 색상으로 표시한다.
+    KlueBERT 양성 항목을 우선 표시하고, include_negative=True이면 음성 항목도 함께 표시한다.
     """
 
-    matched_items = [item for item in hira_results if item.get("matched")]
-
-    if not matched_items:
-        st.info("표시할 증상별 입내원정보가 없습니다.")
-        return
+    summary_df = build_hira_summary_dataframe(
+        classification=classification,
+        include_negative=include_negative,
+    )
 
     st.markdown("### 증상별 입내원정보")
     st.caption(
-        "선택한 성별·연령대·지역 조건에 해당하는 HIRA 진료 통계입니다. "
-        "개별 내담자의 진단 근거가 아니라 참고용 진료 이용 정보입니다."
+        "건강보험심사평가원_시군구별 성별 연령별 주요 정신질환 통계 2024 기준입니다. "
+        "기본적으로 KlueBERT 양성 항목만 표시합니다."
     )
 
-    for start in range(0, len(matched_items), 3):
-        row_items = matched_items[start:start + 3]
-        cols = st.columns(len(row_items), gap="medium")
+    if summary_df.empty:
+        st.info("현재 조건에서 표시할 양성 HIRA 입내원정보가 없습니다. 음성 항목도 함께 보기를 선택하면 전체 항목을 확인할 수 있습니다.")
+        return
 
-        for col, item in zip(cols, row_items):
-            with col:
-                patients = int(item.get("patients", 0) or 0)
-                visit_days_per_patient = item.get("visit_days_per_patient")
-                cost_per_patient = item.get("cost_per_patient")
+    # 질환군별로 대표 질환 1개씩 우선 표시
+    summary_df = (
+        summary_df.sort_values(["판별상태", "patients"], ascending=[False, False])
+        .groupby("context_key", as_index=False)
+        .head(1)
+    )
 
-                visit_days_per_patient_text = (
-                    f"{float(visit_days_per_patient):.2f}일"
-                    if visit_days_per_patient is not None
-                    else "계산 불가"
-                )
+    cols = st.columns(min(len(summary_df), 3), gap="medium")
 
-                cost_per_patient_text = (
-                    f"{float(cost_per_patient):,.0f}원"
-                    if cost_per_patient is not None
-                    else "계산 불가"
-                )
+    max_patients = summary_df["patients"].max() if "patients" in summary_df.columns else 0
 
-                with st.container(border=True):
-                    st.markdown(f"#### {item.get('disease', '질환명 없음')}")
-                    st.caption(
-                        f"{item.get('sido', '')} {item.get('sigungu', '')} · "
-                        f"{item.get('age_group', '')} · {item.get('gender', '')} · "
-                        f"{item.get('year', '')}년"
-                    )
+    for col, (_, row) in zip(cols, summary_df.iterrows()):
+        patients = row.get("patients", 0)
+        visit_days = row.get("visit_days", 0)
+        visit_days_per_patient = row.get("visit_days_per_patient_calc", None)
+        cost_per_patient = row.get("cost_per_patient", None)
 
-                    st.metric("환자수", f"{patients:,}명")
-                    st.metric("1인당 평균 입내원일수", visit_days_per_patient_text)
-                    st.metric("1인당 평균 요양급여비용", cost_per_patient_text)
+        is_positive = row.get("판별상태") == "양성"
+        is_high = float(patients or 0) >= float(max_patients or 0)
+
+        if is_positive and is_high:
+            bg = "#EFF6FF"
+            border = "#93C5FD"
+            title_color = "#1D4ED8"
+        elif is_positive:
+            bg = "#F5F3FF"
+            border = "#C4B5FD"
+            title_color = "#6D28D9"
+        else:
+            bg = "#F8FAFC"
+            border = "#CBD5E1"
+            title_color = "#475569"
+
+        with col:
+            st.markdown(
+                f"""
+                <div style="
+                    background:{bg};
+                    border:1px solid {border};
+                    border-radius:1.15rem;
+                    padding:1rem 1.05rem;
+                    min-height:260px;
+                    box-shadow:0 8px 20px rgba(15,23,42,0.05);
+                ">
+                    <div style="font-size:0.78rem; font-weight:700; color:{title_color}; margin-bottom:0.35rem;">
+                        {row.get("판별상태", "")} 항목
+                    </div>
+                    <div style="font-size:1.08rem; font-weight:780; color:#0F172A; margin-bottom:0.25rem;">
+                        {row.get("disease", "질환명 없음")}
+                    </div>
+                    <div style="font-size:0.8rem; color:#64748B; margin-bottom:0.9rem;">
+                        질환군: {row.get("질환군", "")}
+                    </div>
+                    <div style="border-top:1px solid {border}; padding-top:0.75rem;">
+                        <div style="font-size:0.76rem; color:#64748B;">환자수</div>
+                        <div style="font-size:1.5rem; font-weight:800; color:#0F172A;">
+                            {format_number(patients, "명")}
+                        </div>
+                        <div style="height:0.65rem;"></div>
+                        <div style="font-size:0.76rem; color:#64748B;">입내원일수</div>
+                        <div style="font-size:1.05rem; font-weight:700; color:#334155;">
+                            {format_number(visit_days, "일")}
+                        </div>
+                        <div style="height:0.65rem;"></div>
+                        <div style="font-size:0.76rem; color:#64748B;">1인당 평균 입내원일수</div>
+                        <div style="font-size:1.05rem; font-weight:700; color:#334155;">
+                            {format_float(visit_days_per_patient, "일")}
+                        </div>
+                        <div style="height:0.65rem;"></div>
+                        <div style="font-size:0.76rem; color:#64748B;">1인당 평균 요양급여비용</div>
+                        <div style="font-size:1.05rem; font-weight:700; color:#334155;">
+                            {format_money(cost_per_patient)}
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     st.caption(
         "주의: 위 통계는 요양기관 소재지 기준의 공공 진료 통계이며, "
         "개별 내담자의 진단, 중증도, 위험도 판단 근거로 사용하지 않습니다."
     )
 
-def render_same_group_disease_chart():
+def render_same_group_disease_chart(
+    classification: Dict[str, int] = None,
+    include_negative: bool = False,
+):
+    """
+    이전 버전의 '같은 성별·연령대 주요 정신질환 진료 현황' 막대차트 복원.
+    현재 선택된 내담자와 같은 성별·연령대의 주요 정신질환 환자수를 비교한다.
+    """
+
     st.markdown("#### 같은 성별·연령대 주요 정신질환 진료 현황")
     st.caption("내담자와 같은 성별·연령대의 주요 정신질환 진료 환자수를 비교합니다.")
 
@@ -1898,17 +2192,6 @@ def render_same_group_disease_chart():
             "여성": "여",
         }
     )
-
-    if "context_key" not in hira_df.columns:
-        disease_to_context_key = {
-            "우울증": "depression",
-            "불안장애": "anxiety",
-            "불면증": "sleep",
-            "ADHD": "adhd",
-            "조울증": "bipolar",
-            "조현병": "schizophrenia",
-        }
-        hira_df["context_key"] = hira_df["disease"].map(disease_to_context_key).fillna("etc")
 
     raw_gender = str(client_row.get("성별", "")).strip()
     gender = "여" if raw_gender.startswith("여") else "남"
@@ -1931,10 +2214,20 @@ def render_same_group_disease_chart():
     target = hira_df[
         (hira_df["gender"] == gender)
         & (hira_df["age_group"] == age_group)
-    ]
+    ].copy()
 
     disease_order = ["우울증", "불안장애", "불면증", "ADHD", "조울증", "조현병"]
     target = target[target["disease"].isin(disease_order)]
+
+    # 2024 우선. 없으면 가장 최신 연도.
+    if "year" in target.columns:
+        target["year"] = pd.to_numeric(target["year"], errors="coerce")
+
+        if 2024 in target["year"].dropna().astype(int).tolist():
+            target = target[target["year"] == 2024]
+        elif not target["year"].dropna().empty:
+            latest_year = target["year"].dropna().max()
+            target = target[target["year"] == latest_year]
 
     chart_df = (
         target.groupby("disease", as_index=False)["patients"]
@@ -1960,20 +2253,419 @@ def render_same_group_disease_chart():
         height=340,
     )
 
-    fig.update_traces(texttemplate="%{text:,}", textposition="outside")
+    fig.update_traces(
+        texttemplate="%{text:,}",
+        textposition="outside",
+        marker_line_width=0,
+    )
+
     fig.update_layout(
         xaxis_title="질환",
         yaxis_title="환자수",
         margin=dict(l=10, r=10, t=20, b=10),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
     )
 
-    st.plotly_chart(fig, use_container_width=True, key="anxiety_risk_factor_chart")
+    st.plotly_chart(fig, use_container_width=True, key="same_group_disease_chart_restored")
 
     st.caption(
         f"현재 비교 기준: {age_group} {gender}. "
         "환자수는 진료 통계 기준이며, 인구분모가 없으므로 진료율이 아닙니다."
     )
 
+def _get_context_label(context_key: str) -> str:
+    label_map = {
+        "depression": "우울",
+        "anxiety": "불안",
+        "addiction": "중독",
+    }
+    return label_map.get(context_key, context_key)
+
+
+def _get_context_keywords(context_key: str) -> List[str]:
+    keyword_map = {
+        "depression": ["우울"],
+        "anxiety": ["불안", "공황"],
+        "addiction": ["중독", "알코올", "물질", "약물", "도박", "의존"],
+    }
+    return keyword_map.get(context_key, [])
+
+
+def _filter_hira_by_context(context_key: str) -> pd.DataFrame:
+    """
+    HIRA 데이터에서 우울/불안/중독 관련 질환만 필터링한다.
+    context_key 컬럼이 있으면 우선 사용하고, 없으면 질환명 keyword로 필터링한다.
+    """
+    hira_df = load_hira_model_context().copy()
+
+    for col in ["disease", "gender", "age_group", "sido", "sigungu"]:
+        if col in hira_df.columns:
+            hira_df[col] = hira_df[col].astype(str).str.strip()
+
+    if "gender" in hira_df.columns:
+        hira_df["gender"] = hira_df["gender"].replace(
+            {
+                "남자": "남",
+                "남성": "남",
+                "여자": "여",
+                "여성": "여",
+            }
+        )
+
+    for col in ["year", "patients", "visit_days", "cost_per_patient"]:
+        if col in hira_df.columns:
+            hira_df[col] = pd.to_numeric(hira_df[col], errors="coerce")
+
+    # 2024 우선. 없으면 최신 연도.
+    if "year" in hira_df.columns:
+        if 2024 in hira_df["year"].dropna().astype(int).tolist():
+            hira_df = hira_df[hira_df["year"] == 2024]
+        elif not hira_df["year"].dropna().empty:
+            latest_year = hira_df["year"].dropna().max()
+            hira_df = hira_df[hira_df["year"] == latest_year]
+
+    if "context_key" in hira_df.columns:
+        context_df = hira_df[hira_df["context_key"].astype(str).str.strip() == context_key].copy()
+
+        if not context_df.empty:
+            return context_df
+
+    keywords = _get_context_keywords(context_key)
+
+    if not keywords:
+        return pd.DataFrame()
+
+    pattern = "|".join(keywords)
+    return hira_df[hira_df["disease"].str.contains(pattern, na=False)].copy()
+
+
+def render_hira_donut_chart(
+    df: pd.DataFrame,
+    names_col: str,
+    values_col: str,
+    title: str,
+    key: str,
+    top_n: int = 6,
+    highlight_value: str = "전체",
+):
+    """
+    지역/성별/연령대 분포 도넛차트 공통 함수.
+
+    highlight_value가 '전체'가 아니면 해당 조각을 바깥으로 살짝 빼고,
+    라인 두께를 키워 선택 상태를 강조한다.
+    """
+    if df.empty or names_col not in df.columns or values_col not in df.columns:
+        st.info(f"{title} 데이터를 찾지 못했습니다.")
+        return
+
+    chart_df = (
+        df.groupby(names_col, as_index=False)[values_col]
+        .sum()
+        .sort_values(values_col, ascending=False)
+        .head(top_n)
+    )
+
+    if chart_df.empty or chart_df[values_col].sum() == 0:
+        st.info(f"{title} 데이터를 표시할 수 없습니다.")
+        return
+
+    labels = chart_df[names_col].astype(str).tolist()
+
+    pull_values = [
+        0.12 if highlight_value != "전체" and str(label) == str(highlight_value) else 0
+        for label in labels
+    ]
+
+    line_widths = [
+        4 if highlight_value != "전체" and str(label) == str(highlight_value) else 1
+        for label in labels
+    ]
+
+    fig = px.pie(
+        chart_df,
+        names=names_col,
+        values=values_col,
+        hole=0.62,
+        height=260,
+    )
+
+    fig.update_traces(
+        textposition="inside",
+        textinfo="percent",
+        pull=pull_values,
+        marker=dict(
+            line=dict(
+                color="white",
+                width=line_widths,
+            )
+        ),
+        hovertemplate="<b>%{label}</b><br>환자수: %{value:,}명<br>비중: %{percent}<extra></extra>",
+    )
+
+    fig.update_layout(
+        title=None,
+        margin=dict(l=5, r=5, t=10, b=5),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.25,
+            xanchor="center",
+            x=0.5,
+        ),
+    )
+
+    st.markdown(f"**{title}**")
+
+    if highlight_value != "전체":
+        st.caption(f"선택 강조: {highlight_value}")
+
+    st.plotly_chart(fig, use_container_width=True, key=key)
+
+def build_context_factor_treemap_df(
+    context_key: str,
+    factors: Dict[str, int],
+) -> pd.DataFrame:
+    """
+    우울/불안/중독 상세 영역에서 사용할 28요인 기반 트리맵 데이터 생성.
+
+    기존 HIRA 질환 구성 트리맵이 아니라,
+    현재 상담 기록에서 추출된 28요인 점수를 기준으로 구성한다.
+    """
+    factor_df = build_factor_dataframe(factors).copy()
+
+    context_factor_keys = {
+        "depression": [
+            "depressive_mood",
+            "worthlessness",
+            "guilt",
+            "impaired_cognition",
+            "suicidal",
+            "anhedonia",
+            "psychomotor_changes",
+            "weight_appetite",
+            "sleep_disturbance",
+            "fatigue",
+        ],
+        "anxiety": [
+            "anxiety",
+            "loss_of_control",
+            "social_avoidance",
+            "physical_symptom",
+        ],
+        "addiction": [
+            "craving",
+            "withdrawal",
+            "tolerance",
+            "social_problem",
+            "loss_of_control",
+            "motivation_for_change",
+        ],
+    }
+
+    selected_keys = context_factor_keys.get(context_key, [])
+
+    tree_df = factor_df[factor_df["요인코드"].isin(selected_keys)].copy()
+    tree_df = tree_df[tree_df["점수"] > 0]
+
+    if tree_df.empty:
+        return tree_df
+
+    tree_df["분류"] = _get_context_label(context_key)
+    tree_df["값"] = tree_df["점수"].astype(int)
+
+    return tree_df
+
+def render_hira_context_detail_section(
+    context_key: str,
+    classification: Dict[str, int],
+    factors: Dict[str, int],
+    expanded_default: bool = True,
+):
+    """
+    우울/불안/중독 상세 영역.
+
+    수정 사항:
+    1. 지역/성별/연령대 도넛차트는 HIRA 2024 기준으로 유지
+    2. 오른쪽 필터는 데이터를 필터링하는 기능이 아니라, 도넛차트 조각을 하이라이트하는 기능
+    3. 트리맵은 HIRA 질환 구성이 아니라 현재 상담 기록의 28요인 점수 기반으로 표시
+    """
+
+    label = _get_context_label(context_key)
+    is_positive = int(classification.get(context_key, 0) or 0) == 1
+
+    if not is_positive:
+        return
+
+    context_df = _filter_hira_by_context(context_key)
+
+    if context_df.empty:
+        st.info(f"{label} 관련 HIRA 데이터를 찾지 못했습니다.")
+        return
+
+    st.markdown(f"### [{label}] 관련 공공통계 상세")
+    st.caption(
+        f"{label} 관련 질환의 HIRA 2024 분포와 현재 상담 기록의 28요인 구성을 함께 확인합니다."
+    )
+
+    # =====================================================
+    # 1행: 필터는 '하이라이트 선택' 용도
+    # =====================================================
+    d1, d2, d3, filter_col = st.columns([0.24, 0.24, 0.24, 0.28], gap="medium")
+
+    with filter_col:
+        st.markdown("**하이라이트 필터**")
+        st.caption("선택한 지역·연령대가 왼쪽 도넛차트에서 강조 표시됩니다.")
+
+        sido_options = ["전체"] + sorted(context_df["sido"].dropna().unique().tolist())
+        selected_sido = st.selectbox(
+            "지역",
+            options=sido_options,
+            key=f"{context_key}_detail_sido_highlight",
+        )
+
+        age_options = ["전체"] + sorted(context_df["age_group"].dropna().unique().tolist())
+        selected_age = st.selectbox(
+            "연령",
+            options=age_options,
+            key=f"{context_key}_detail_age_highlight",
+        )
+
+    with d1:
+        render_hira_donut_chart(
+            context_df,
+            names_col="sido",
+            values_col="patients",
+            title="지역",
+            key=f"{context_key}_sido_donut",
+            highlight_value=selected_sido,
+        )
+
+    with d2:
+        render_hira_donut_chart(
+            context_df,
+            names_col="gender",
+            values_col="patients",
+            title="성별",
+            key=f"{context_key}_gender_donut",
+            highlight_value="전체",
+        )
+
+    with d3:
+        render_hira_donut_chart(
+            context_df,
+            names_col="age_group",
+            values_col="patients",
+            title="연령대",
+            key=f"{context_key}_age_donut",
+            highlight_value=selected_age,
+        )
+
+    st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
+
+    # =====================================================
+    # 2행: 28요인 트리맵 + 공공통계
+    # =====================================================
+    tree_col, stat_col = st.columns([0.55, 0.45], gap="large")
+
+    with tree_col:
+        with st.container(border=True):
+            st.markdown(f"#### {label} 관련 28요인 구성")
+            st.caption("현재 상담 기록에서 추출된 28요인 점수를 기준으로 표시합니다.")
+
+            tree_df = build_context_factor_treemap_df(
+                context_key=context_key,
+                factors=factors,
+            )
+
+            if tree_df.empty:
+                st.info(f"현재 상담 기록에서 0점보다 큰 {label} 관련 28요인이 없습니다.")
+            else:
+                fig_tree = px.treemap(
+                    tree_df,
+                    path=["분류", "카테고리", "요인"],
+                    values="값",
+                    color="값",
+                    height=330,
+                )
+
+                fig_tree.update_traces(
+                    texttemplate="<b>%{label}</b><br>%{value}점",
+                    hovertemplate="<b>%{label}</b><br>점수: %{value}점<extra></extra>",
+                )
+
+                fig_tree.update_layout(
+                    margin=dict(l=5, r=5, t=10, b=5),
+                )
+
+                st.plotly_chart(
+                    fig_tree,
+                    use_container_width=True,
+                    key=f"{context_key}_factor_treemap",
+                )
+
+    with stat_col:
+        with st.container(border=True):
+            st.markdown("#### 공공통계")
+
+            total_patients = context_df["patients"].sum() if "patients" in context_df.columns else 0
+            total_visit_days = context_df["visit_days"].sum() if "visit_days" in context_df.columns else 0
+
+            if total_patients > 0:
+                avg_visit_days = total_visit_days / total_patients
+            else:
+                avg_visit_days = 0
+
+            if "cost_per_patient" in context_df.columns:
+                avg_cost = context_df["cost_per_patient"].mean()
+            else:
+                avg_cost = 0
+
+            c1, c2 = st.columns(2)
+            c1.metric("환자수", f"{total_patients:,.0f}명")
+            c2.metric("입내원일수", f"{total_visit_days:,.0f}일")
+
+            c3, c4 = st.columns(2)
+            c3.metric("1인당 입내원일수", f"{avg_visit_days:,.2f}일")
+            c4.metric("1인당 요양급여비용", f"{avg_cost:,.0f}원")
+
+            st.caption(
+                "위 공공통계는 하이라이트 필터와 별개로 전체 HIRA 2024 기준 합계입니다. "
+                "요양기관 소재지 기준 공공 진료 통계이며, 개별 내담자의 진단·중증도·위험도 판단 근거가 아닙니다."
+            )
+
+    # =====================================================
+    # 3행: 상담자 해석 도우미
+    # =====================================================
+    with st.container(border=True):
+        st.markdown("#### 상담자 해석 도우미")
+
+        highlight_parts = []
+
+        if selected_sido != "전체":
+            highlight_parts.append(f"{selected_sido} 지역")
+        if selected_age != "전체":
+            highlight_parts.append(f"{selected_age}")
+
+        if highlight_parts:
+            highlight_text = " · ".join(highlight_parts)
+        else:
+            highlight_text = "전체 분포"
+
+        st.markdown(
+            f"""
+            현재 KlueBERT 판별에서 **{label} 관련 항목이 양성**으로 표시되었습니다.
+
+            왼쪽 도넛차트에서는 **{highlight_text}**가 강조되어 있습니다.  
+            이 강조 기능은 상담자가 HIRA 공공통계에서 특정 지역·연령대의 상대적 위치를 빠르게 확인하기 위한 시각적 보조 기능입니다.
+
+            가운데 트리맵은 HIRA 질환 구성이 아니라, **현재 상담 기록에서 추출된 {label} 관련 28요인 점수 구성**입니다.  
+            따라서 공공통계는 인구통계적 참고자료로, 28요인 트리맵은 현재 상담 발화의 내용 기반 참고자료로 분리해서 해석해야 합니다.
+
+            최종 판단은 상담자가 실제 발화 맥락, 증상 지속 기간, 기능 저하 정도, 보호요인, 위험요인을 함께 검토해 수행해야 합니다.
+            """
+        )
 
 def render_depression_dashboard_section(classification, factors, key_prefix="depression"):
     if int(classification.get("depression", 0)) != 1:
@@ -2192,6 +2884,140 @@ def render_addiction_dashboard_section(classification, factors, key_prefix="addi
             """
         )
 
+def render_session_area_trend(classification: Dict[str, int], factors: Dict[str, int]):
+    """
+    회기별 추이 변화.
+    꺾은선 차트를 복원하되, 선 아래 영역은 여러 개의 반투명 fill layer를 겹쳐
+    그라데이션처럼 보이게 만든다.
+    """
+
+    trend = pd.DataFrame(
+        {
+            "회기": ["1회기", "2회기", "3회기", "현재"],
+            "우울": [2.8, 2.6, 2.4, int(classification.get("depression", 0) or 0) * 3],
+            "불안": [2.7, 2.5, 2.4, int(classification.get("anxiety", 0) or 0) * 3],
+            "중독": [1.2, 1.1, 1.0, int(classification.get("addiction", 0) or 0) * 3],
+            "수면문제": [3.0, 3.0, 3.0, int(factors.get("sleep_disturbance", 0) or 0)],
+            "피로감": [2.2, 2.6, 3.0, int(factors.get("fatigue", 0) or 0)],
+        }
+    )
+
+    color_map = {
+        "우울": "rgba(236, 72, 153, 1)",
+        "불안": "rgba(124, 58, 237, 1)",
+        "중독": "rgba(249, 115, 22, 1)",
+        "수면문제": "rgba(34, 197, 94, 1)",
+        "피로감": "rgba(59, 130, 246, 1)",
+    }
+
+    fill_color_map = {
+        "우울": "rgba(236, 72, 153, {alpha})",
+        "불안": "rgba(124, 58, 237, {alpha})",
+        "중독": "rgba(249, 115, 22, {alpha})",
+        "수면문제": "rgba(34, 197, 94, {alpha})",
+        "피로감": "rgba(59, 130, 246, {alpha})",
+    }
+
+    fig = go.Figure()
+
+    x_values = trend["회기"].tolist()
+    series_names = ["우울", "불안", "중독", "수면문제", "피로감"]
+
+    # 그라데이션 느낌을 위한 fill layer
+    gradient_layers = [
+        (0.35, 0.035),
+        (0.55, 0.030),
+        (0.75, 0.024),
+        (1.00, 0.018),
+    ]
+
+    for series in series_names:
+        y_values = trend[series].astype(float).tolist()
+
+        for scale, alpha in gradient_layers:
+            scaled_y = [value * scale for value in y_values]
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_values,
+                    y=scaled_y,
+                    mode="lines",
+                    line=dict(width=0),
+                    fill="tozeroy",
+                    fillcolor=fill_color_map[series].format(alpha=alpha),
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+        # 실제 꺾은선
+        fig.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=y_values,
+                mode="lines+markers",
+                name=series,
+                line=dict(
+                    color=color_map[series],
+                    width=3,
+                    shape="spline",
+                ),
+                marker=dict(
+                    size=8,
+                    color=color_map[series],
+                    line=dict(width=2, color="white"),
+                ),
+                hovertemplate=f"<b>{series}</b><br>회기: %{{x}}<br>점수: %{{y:.1f}}<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        height=360,
+        margin=dict(l=10, r=10, t=20, b=10),
+        xaxis_title="회기",
+        yaxis_title="점수",
+        yaxis=dict(range=[0, 3.2], gridcolor="rgba(148,163,184,0.18)"),
+        xaxis=dict(gridcolor="rgba(148,163,184,0.10)"),
+        legend_title_text="요인",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+
+    st.plotly_chart(fig, use_container_width=True, key="session_gradient_line_trend_chart")
+
+
+def render_factor_detail_table(factor_df: pd.DataFrame):
+    """
+    사진 배치의 '28요인 세부내용' 표.
+    기본은 0점 요인을 숨기고, 체크 시 전체 요인을 표시한다.
+    """
+
+    show_all = st.checkbox("0점 요인 포함", value=False, key="show_all_factor_detail")
+
+    table_df = factor_df.copy()
+
+    if not show_all:
+        table_df = table_df[table_df["점수"] > 0]
+
+    table_df = table_df.sort_values("점수", ascending=False)
+
+    display_df = table_df.rename(
+        columns={
+            "카테고리": "내용",
+            "요인": "요인",
+            "점수": "점수",
+        }
+    )[["내용", "요인", "점수"]]
+
+    if display_df.empty:
+        st.info("현재 0점보다 큰 28요인 항목이 없습니다.")
+    else:
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
 def render_factor_frequency_card(factors: Dict[str, int]):
     """
     4범주 빈도 차트.
@@ -2299,17 +3125,15 @@ def render_ai_summary_cards(factors: Dict[str, int]):
 def render_dashboard():
     st.markdown('<div class="section-title">분석 대시보드</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-desc">AI 모델 출력 결과를 기반으로 상담 내용의 주요 라벨과 요인을 시각화합니다.</div>',
+        '<div class="page-desc">AI 모델 출력 결과와 HIRA 공공 진료 통계를 기반으로 상담 기록의 주요 요인과 참고 통계를 시각화합니다.</div>',
         unsafe_allow_html=True,
     )
-    
+
     result = st.session_state.analysis_result
 
     if result is None:
         st.info("아직 분석 결과가 없습니다. 먼저 상담내역 기록·추가 화면에서 AI 분석을 실행하세요.")
         return
-
-    backend = result.get("model_info", {}).get("backend", "unknown")
 
     # 개발자용 모델 연결 상태: 기본 화면에서는 숨김
     with st.expander("모델 연결 상태 보기", expanded=False):
@@ -2318,7 +3142,7 @@ def render_dashboard():
         classifier_status = result.get("model_info", {}).get("classifier_status", "")
         classifier_message = result.get("model_info", {}).get("classifier_message", "")
         classifier_scores = result.get("model_info", {}).get("classifier_scores", {})
-        classifier_raw_scores = result.get("model_info", {}).get("classifier_raw_scores", {})
+        classifier_raw_scores = result.get("model_info", {}).get("raw_scores", {})
         factor_backend = result.get("model_info", {}).get("factor_backend", "mock")
         factor_status = result.get("model_info", {}).get("factor_status", "")
         factor_message = result.get("model_info", {}).get("factor_message", "")
@@ -2351,7 +3175,7 @@ def render_dashboard():
 
         if classifier_raw_scores:
             st.caption(f"KlueBERT 회귀 원점수(raw score): {classifier_raw_scores}")
-                
+
     selected_client_id = st.session_state.selected_client
     selected_session = st.session_state.selected_session
 
@@ -2364,13 +3188,13 @@ def render_dashboard():
         current_session = current_session_rows.iloc[0]
     else:
         current_session = None
-    
+
     classification = result["classification"]
     factors = result["factors"]
     factor_df = build_factor_dataframe(factors)
 
-    # 1. 원본 라벨은 접어서 표시
-    with st.expander("원본 데이터셋 라벨"):
+    # 원본 라벨은 접어서 표시
+    with st.expander("원본 데이터셋 라벨", expanded=False):
         if current_session is not None:
             label_cols = st.columns(4)
             label_cols[0].metric("우울 원본 라벨", int(current_session.get("depression", 0)))
@@ -2380,172 +3204,121 @@ def render_dashboard():
         else:
             st.info("현재 선택한 회기의 원본 라벨 정보를 찾지 못했습니다.")
 
-    # 2. 예측 KPI
+    # =====================================================
+    # 0. 상단 공통 영역: 상담사 확인 필요 배너
+    # =====================================================
     render_top_risk_cards(classification, factors)
 
     # =====================================================
-    # 1. 요인 요약 묶음: 4범주 빈도 차트 + AI 분석 요약
+    # 1행: 회기별 추이 변화 + 28요인 세부내용
     # =====================================================
+    row1_left, row1_right = st.columns([0.60, 0.40], gap="large")
+
+    with row1_left:
+        with st.container(border=True):
+            st.markdown("### 회기별 추이 변화")
+            st.caption("회기별 주요 요인 변화를 영역형 시계열 차트로 표시합니다.")
+            render_session_area_trend(classification, factors)
+
+    with row1_right:
+        with st.container(border=True):
+            st.markdown("### 28요인 세부내용")
+            st.caption("점수가 높은 요인부터 표시합니다.")
+            render_factor_detail_table(factor_df)
+
     st.markdown("<br>", unsafe_allow_html=True)
 
-    with st.container(border=True):
-        st.markdown("### 요인 분석 요약")
-        st.caption("상담 기록에서 추출된 28요인을 증상·위험·개선·개입 범주로 요약합니다.")
+    # =====================================================
+    # 2행: 28요인 분석 + AI 분석 요약
+    # =====================================================
+    row2_left, row2_right = st.columns([0.55, 0.45], gap="large")
 
-        summary_left, summary_right = st.columns([0.36, 0.64], gap="large")
+    with row2_left:
+        with st.container(border=True):
+            st.markdown("### 28요인 분석")
+            st.caption("상담 기록에서 추출된 28요인을 카테고리별로 표시합니다.")
 
-        with summary_left:
-            render_factor_frequency_card(factors)
+            fig_factor = px.bar(
+                factor_df.sort_values("점수", ascending=True),
+                x="점수",
+                y="요인",
+                color="카테고리",
+                orientation="h",
+                range_x=[0, 3],
+                height=520,
+            )
 
-        with summary_right:
+            fig_factor.update_layout(
+                xaxis_title="점수",
+                yaxis_title="요인",
+                margin=dict(l=10, r=10, t=20, b=10),
+                legend_title_text="카테고리",
+            )
+
+            st.plotly_chart(
+                fig_factor,
+                use_container_width=True,
+                key="main_factor_horizontal_chart",
+            )
+
+    with row2_right:
+        with st.container(border=True):
             render_ai_summary_cards(factors)
 
-    # =====================================================
-    # 2. HIRA 진료 현황 묶음:
-    # 같은 성별·연령대 주요 정신질환 진료 현황 + 증상별 입내원정보
-    # =====================================================
     st.markdown("<br>", unsafe_allow_html=True)
 
-    with st.container(border=True):
-        st.markdown("### 유사 인구집단 진료 현황")
-        st.caption("내담자와 같은 성별·연령대 기준의 주요 정신질환 진료 현황과 증상별 입내원 정보를 함께 확인합니다.")
+    # =====================================================
+    # 3행: 요인 도넛차트 + 내담자 조건 반영 정신질환 추세
+    # =====================================================
+    row3_left, row3_right = st.columns([0.35, 0.65], gap="large")
 
-        visit_left, visit_right = st.columns([0.58, 0.42], gap="large")
+    with row3_left:
+        with st.container(border=True):
+            render_factor_frequency_card(factors)
 
-        with visit_left:
+    with row3_right:
+        with st.container(border=True):
+            include_negative_hira = st.checkbox(
+                "증상별 입내원정보에서 음성 항목도 함께 보기",
+                value=False,
+                key="include_negative_hira_items",
+                help="기본값은 KlueBERT 양성 항목만 증상별 입내원정보 카드에 표시합니다.",
+            )
+
             render_same_group_disease_chart()
 
-        with visit_right:
-            # 여기서는 아래 HIRA 인구통계 비교 카드에서 만든 hira_results가 아직 없으므로,
-            # 임시로 현재 분석 결과 기준 HIRA 결과를 먼저 생성한다.
-            temp_hira_df = load_hira_model_context()
-            temp_context_keys = infer_hira_context_keys(result)
-
-            client_row = get_client_row()
-            raw_gender = str(client_row.get("성별", "")).strip()
-            default_gender = "여" if raw_gender.startswith("여") else "남"
-
-            age_band_to_hira = {
-                "0대": "0~9세",
-                "10대": "10~19세",
-                "20대": "20~29세",
-                "30대": "30~39세",
-                "40대": "40~49세",
-                "50대": "50~59세",
-                "60대": "60~69세",
-                "70대": "70~79세",
-                "80대": "80~89세",
-                "90대": "90~99세",
-            }
-
-            raw_age_band = str(client_row.get("연령대", "")).strip()
-            default_age_group = age_band_to_hira.get(raw_age_band, "30~39세")
-
-            default_sido = (
-                "서울"
-                if "서울" in temp_hira_df["sido"].dropna().unique().tolist()
-                else temp_hira_df["sido"].dropna().iloc[0]
-            )
-
-            default_sigungu_list = (
-                temp_hira_df[temp_hira_df["sido"] == default_sido]["sigungu"]
-                .dropna()
-                .unique()
-                .tolist()
-            )
-
-            default_sigungu = default_sigungu_list[0] if default_sigungu_list else ""
-
-            temp_hira_results = get_hira_context(
-                gender=default_gender,
-                sido=default_sido,
-                sigungu=default_sigungu,
-                age_group=default_age_group,
-                context_keys=temp_context_keys,
-            )
-
-            render_hira_report_sentence_card(temp_hira_results or [])
-
-    # =====================================================
-    # 3. HIRA 인구통계 비교: 사용자가 직접 조건 선택
-    # =====================================================
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # =====================================================
+    # 4행: 증상별 입내원정보
+    # =====================================================
     with st.container(border=True):
-        hira_results = render_hira_reference_card(result, key_prefix="main_hira")
-
-    # =====================================================
-    # 4. 여기서 한 번 끊고, 판정별 설명 대시보드는 접어서 표시
-    # =====================================================
-    st.divider()
-
-    with st.expander("우울/불안/중독 판정 설명 대시보드 보기", expanded=False):
-        render_depression_dashboard_section(
-            classification,
-            factors,
-            key_prefix="expander_depression",
-        )
-
-        render_anxiety_dashboard_section(
-            classification,
-            factors,
-            key_prefix="expander_anxiety",
-        )
-
-        render_addiction_dashboard_section(
-            classification,
-            factors,
-            key_prefix="expander_addiction",
-        )
-    
-    left, right = st.columns([0.58, 0.42], gap="large")
-
-    with left:
-        st.markdown("#### 세부 증상 요인 분석")
-        fig = px.bar(
-            factor_df.sort_values("점수", ascending=True),
-            x="점수",
-            y="요인",
-            color="카테고리",
-            orientation="h",
-            range_x=[0, 3],
-            height=680,
-        )
-        st.plotly_chart(fig, use_container_width=True, key="same_group_disease_chart")
-
-    with right:
-        st.markdown("#### 주요 요인 표")
-        st.dataframe(
-            factor_df.sort_values(["점수", "카테고리"], ascending=[False, True]),
-            use_container_width=True,
-            hide_index=True,
+        render_hira_report_sentence_card(
+            classification=classification,
+            include_negative=include_negative_hira,
         )
 
     st.divider()
 
-    trend = pd.DataFrame(
-            {
-                "회기": ["1회기", "2회기", "3회기", "현재"],
-                "우울": [2.8, 2.6, 2.4, classification.get("depression", 0) * 3],
-                "불안": [2.7, 2.5, 2.4, classification.get("anxiety", 0) * 3],
-                "수면문제": [3.0, 3.0, 3.0, factors.get("sleep_disturbance", 0)],
-                "피로감": [2.2, 2.6, 3.0, factors.get("fatigue", 0)],
-            }
-        )
+    # =====================================================
+    # 하단 접힘 영역: 판정별 상세 대시보드
+    # =====================================================
+    with st.expander("우울/불안/중독 상세 공공통계 대시보드 보기", expanded=False):
+        positive_detail_count = 0
 
-    st.markdown("#### 회기별 라벨 및 주요 요인 추이 예시")
-    
-    fig_trend = px.line(
-        trend,
-        x="회기",
-        y=["우울", "불안", "수면문제", "피로감"],
-        markers=True,
-        height=420,
-    )
-    
-    st.plotly_chart(fig_trend, use_container_width=True)
+        for context_key in ["depression", "anxiety", "addiction"]:
+            if int(classification.get(context_key, 0) or 0) == 1:
+                positive_detail_count += 1
+                render_hira_context_detail_section(
+                    context_key=context_key,
+                    classification=classification,
+                    factors=factors,
+                )
+                st.divider()
 
-
+        if positive_detail_count == 0:
+            st.info("현재 KlueBERT 양성 항목이 없어 우울/불안/중독 상세 공공통계 대시보드를 표시하지 않습니다.")
+            
 # =========================================================
 # 14. AI 보고서
 # =========================================================
