@@ -64,3 +64,6 @@ hf-space-remote/
 
 data/processed/*
 !data/processed/.gitkeep
+
+!data/references/
+!data/references/**
