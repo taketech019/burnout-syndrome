@@ -4,9 +4,11 @@
 # =========================================================
 
 import json
+import base64
+import hashlib
 import re
-from io import BytesIO
 from datetime import datetime
+from html import escape as html_escape
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
@@ -14,6 +16,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
+
+from src.analysis_pipeline import (
+    build_dialogue_text as pipeline_build_dialogue_text,
+    run_analysis as pipeline_run_analysis,
+)
+from src.data_loader import load_app_data
+from src.report import make_docx_report_bytes, make_pdf_report_bytes
 
 
 # =========================================================
@@ -301,7 +310,7 @@ def load_processed_sessions() -> Tuple[pd.DataFrame, pd.DataFrame, Dict[Tuple[st
         st.warning(f"processed sessions 데이터를 읽지 못해 데모 데이터를 사용합니다: {error}")
         return CLIENTS, SESSIONS, {}
     
-CLIENTS, SESSIONS, SESSION_DIALOGUES = load_processed_sessions()
+CLIENTS, SESSIONS, SESSION_DIALOGUES, DEFAULT_DIALOGUE = load_app_data()
 
 DEFAULT_CLIENT_ID = CLIENTS.iloc[0]["내담자 ID"] if not CLIENTS.empty else "C-001"
 
@@ -769,7 +778,7 @@ def build_factor_dataframe(factors: Dict[str, int]) -> pd.DataFrame:
             "sleep_disturbance",
             "fatigue",
         ]:
-            category = "우울/증상"
+            category = "우울"
         elif key in [
             "anxiety",
             "loss_of_control",
@@ -843,166 +852,39 @@ def make_json_export(analysis_result: Dict[str, Any]) -> str:
     return json.dumps(export_data, ensure_ascii=False, indent=2)
 
 
-
-def make_docx_report_bytes(report_text: str) -> bytes | None:
-    """
-    편집된 보고서 텍스트를 DOCX 파일 바이트로 변환한다.
-    모델/분석 로직과 무관한 다운로드용 보조 함수다.
-    """
-    try:
-        from docx import Document
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-    except Exception:
-        return None
-
-    doc = Document()
-    title = doc.add_heading("상담 요약 보고서", level=0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    doc.add_paragraph(f"작성일: {datetime.now().strftime('%Y.%m.%d')}")
-    doc.add_paragraph(f"내담자: {st.session_state.selected_client} / 회기: {st.session_state.selected_session}")
-    doc.add_paragraph("")
-
-    for line in str(report_text or "").split("\n"):
-        stripped = line.strip()
-
-        if not stripped:
-            doc.add_paragraph("")
-        elif stripped.startswith("[") and stripped.endswith("]"):
-            doc.add_heading(stripped.strip("[]"), level=1)
-        elif re.match(r"^\d+\.\s", stripped):
-            doc.add_heading(stripped, level=2)
-        elif stripped.startswith("## "):
-            doc.add_heading(stripped.replace("## ", "", 1), level=1)
-        elif stripped.startswith("# "):
-            doc.add_heading(stripped.replace("# ", "", 1), level=0)
-        else:
-            doc.add_paragraph(stripped)
-
-    buffer = BytesIO()
-    doc.save(buffer)
-    return buffer.getvalue()
-
-
-def make_pdf_report_bytes(report_text: str) -> bytes | None:
-    """
-    편집된 보고서 텍스트를 PDF 파일 바이트로 변환한다.
-    한글 깨짐을 막기 위해 ReportLab 내장 CJK CID 폰트를 우선 사용한다.
-    """
-    try:
-        from xml.sax.saxutils import escape
-        from reportlab.lib import colors
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import mm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-    except Exception:
-        return None
-
-    font_name = "HYGothic-Medium"
-
-    try:
-        pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
-        pdfmetrics.registerFont(UnicodeCIDFont("HYSMyeongJo-Medium"))
-    except Exception:
-        font_name = "Helvetica"
-
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=18 * mm,
-        leftMargin=18 * mm,
-        topMargin=18 * mm,
-        bottomMargin=18 * mm,
-    )
-
-    styles = getSampleStyleSheet()
-    styles.add(
-        ParagraphStyle(
-            name="KoreanTitle",
-            fontName=font_name,
-            fontSize=21,
-            leading=28,
-            alignment=1,
-            textColor=colors.HexColor("#123160"),
-            spaceAfter=16,
-        )
-    )
-    styles.add(
-        ParagraphStyle(
-            name="KoreanHeading",
-            fontName=font_name,
-            fontSize=13,
-            leading=18,
-            textColor=colors.HexColor("#1E40AF"),
-            spaceBefore=12,
-            spaceAfter=6,
-        )
-    )
-    styles.add(
-        ParagraphStyle(
-            name="KoreanBody",
-            fontName=font_name,
-            fontSize=9.5,
-            leading=15,
-            textColor=colors.HexColor("#1F2937"),
-        )
-    )
-
-    story = [
-        Paragraph("상담 요약 보고서", styles["KoreanTitle"]),
-        Paragraph(
-            escape(f"작성일: {datetime.now().strftime('%Y.%m.%d')} / {st.session_state.selected_client} / {st.session_state.selected_session}"),
-            styles["KoreanBody"],
-        ),
-        Spacer(1, 8),
-    ]
-
-    for line in str(report_text or "").split("\n"):
-        stripped = line.strip()
-
-        if not stripped:
-            story.append(Spacer(1, 6))
-            continue
-
-        safe_line = escape(stripped)
-
-        if stripped.startswith("[") and stripped.endswith("]"):
-            story.append(Paragraph(safe_line.strip("[]"), styles["KoreanHeading"]))
-        elif re.match(r"^\d+\.\s", stripped):
-            story.append(Paragraph(safe_line, styles["KoreanHeading"]))
-        elif stripped.startswith("# "):
-            story.append(Paragraph(escape(stripped.replace("# ", "", 1)), styles["KoreanTitle"]))
-        elif stripped.startswith("## "):
-            story.append(Paragraph(escape(stripped.replace("## ", "", 1)), styles["KoreanHeading"]))
-        else:
-            story.append(Paragraph(safe_line, styles["KoreanBody"]))
-
-    doc.build(story)
-    return buffer.getvalue()
+# 친구 코드의 화면 흐름은 유지하고, 실제 데이터/분석 구현은 공통 src 모듈을 사용한다.
+build_dialogue_text = pipeline_build_dialogue_text
+run_analysis = pipeline_run_analysis
 
 
 # =========================================================
 # 7. Session State 초기화
 # =========================================================
 def init_session_state():
+    global CLIENTS
+
     defaults = {
-        "page": "상담내역 기록·추가",
+        "page": "내담자 홈",
         "selected_client": DEFAULT_CLIENT_ID,
         "selected_session": DEFAULT_SESSION_NAME,
-        "client_search": DEFAULT_CLIENT_ID,
+        "client_search": "",
+        "patient_home_tab": "내담자 정보",
         "record_mode": "existing",
         "dialogue_rows": DEFAULT_SESSION_DIALOGUE.copy(),
         "chat_history": [],
         "analysis_result": None,
+        "session_notes": {},
+        "registered_clients": [],
     }
 
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+    if st.session_state.registered_clients:
+        registered_df = pd.DataFrame(st.session_state.registered_clients)
+        CLIENTS = pd.concat([CLIENTS, registered_df], ignore_index=True)
+        CLIENTS = CLIENTS.drop_duplicates(subset=["내담자 ID"], keep="last")
 
 
 # =========================================================
@@ -1010,6 +892,16 @@ def init_session_state():
 # =========================================================
 def go_page(page_name: str):
     st.session_state.page = page_name
+
+
+def open_session_detail(session_name: str):
+    select_session(session_name)
+    go_page("회기 상세")
+
+
+def back_to_patient_home():
+    st.session_state.patient_home_tab = "상담관리"
+    go_page("내담자 홈")
 
 
 def select_session(session_name: str):
@@ -1025,16 +917,152 @@ def select_session(session_name: str):
         st.session_state.dialogue_rows = DEFAULT_DIALOGUE.copy()
 
 
-def start_new_session():
-    st.session_state.record_mode = "new"
-    st.session_state.selected_session = "새 상담"
-    st.session_state.dialogue_rows = pd.DataFrame(
+NEW_SESSION_FORM_KEYS = [
+    "new_session_name",
+    "new_session_topic",
+    "new_session_scope",
+    "new_session_date",
+    "new_session_input_mode",
+    "new_session_script_text",
+    "new_session_dialogue_editor",
+]
+
+
+def get_empty_dialogue_rows() -> pd.DataFrame:
+    return pd.DataFrame(
         {
             "화자": ["상담사", "내담자"],
             "발화": ["", ""],
         }
     )
+
+
+def reset_new_session_form_state():
+    for key in NEW_SESSION_FORM_KEYS:
+        st.session_state.pop(key, None)
+
+    st.session_state.dialogue_rows = get_empty_dialogue_rows()
     st.session_state.analysis_result = None
+
+
+def start_new_session():
+    reset_new_session_form_state()
+    st.session_state.record_mode = "new"
+    st.session_state.selected_session = "새 상담"
+    st.session_state.new_session_name = get_next_session_name()
+    st.session_state.new_session_topic = ""
+    st.session_state.new_session_scope = "복합"
+    st.session_state.new_session_date = datetime.now().date()
+    st.session_state.new_session_input_mode = "발화 단위 입력"
+    st.session_state.analysis_result = None
+
+
+def cancel_new_session():
+    reset_new_session_form_state()
+    client_sessions = SESSIONS[SESSIONS["내담자 ID"] == st.session_state.selected_client]
+
+    if client_sessions.empty:
+        st.session_state.record_mode = "existing"
+        go_page("상담내역 기록·추가")
+        return
+
+    select_session(client_sessions.iloc[0]["회기"])
+    go_page("상담내역 기록·추가")
+
+
+def get_next_session_name() -> str:
+    client_sessions = SESSIONS[SESSIONS["내담자 ID"] == st.session_state.selected_client]
+    max_order = 0
+
+    for value in client_sessions["회기"].tolist():
+        match = re.search(r"(\d+)", str(value or ""))
+
+        if match:
+            max_order = max(max_order, int(match.group(1)))
+
+    return f"{max_order + 1}회기"
+
+
+def save_new_session(script: str, run_ai: bool = False):
+    global SESSIONS, SESSION_DIALOGUES
+
+    session_name = st.session_state.get("new_session_name", get_next_session_name())
+    session_date = st.session_state.get("new_session_date", datetime.now().date())
+    session_topic = str(st.session_state.get("new_session_topic", "") or "").strip() or "(주제 미입력)"
+    session_date_text = session_date.strftime("%Y-%m-%d") if hasattr(session_date, "strftime") else str(session_date)
+
+    new_row = {
+        "내담자 ID": st.session_state.selected_client,
+        "회기": session_name,
+        "상담일": session_date_text,
+        "상담 주제": session_topic,
+        "보고서 상태": "작성 완료" if run_ai else "임시 저장",
+    }
+
+    for column in SESSIONS.columns:
+        if column not in new_row:
+            new_row[column] = ""
+
+    existing_mask = (
+        (SESSIONS["내담자 ID"] == st.session_state.selected_client)
+        & (SESSIONS["회기"] == session_name)
+    )
+
+    if existing_mask.any():
+        SESSIONS.loc[existing_mask, list(new_row.keys())] = list(new_row.values())
+    else:
+        SESSIONS = pd.concat([SESSIONS, pd.DataFrame([new_row])], ignore_index=True)
+
+    st.session_state.dialogue_rows = _script_to_dialogue_df(script)
+    SESSION_DIALOGUES[(st.session_state.selected_client, session_name)] = st.session_state.dialogue_rows.copy()
+    st.session_state.selected_session = session_name
+    st.session_state.record_mode = "existing"
+
+    if run_ai and script.strip():
+        st.session_state.analysis_result = run_analysis(script)
+        go_page("분석 대시보드")
+    else:
+        st.session_state.analysis_result = None
+        go_page("상담내역 기록·추가")
+
+
+def register_new_client(name: str, gender: str, age: str, region: str, memo: str) -> bool:
+    global CLIENTS
+
+    clean_name = str(name or "").strip()
+
+    if not clean_name:
+        st.warning("이름/alias를 입력하세요.")
+        return False
+
+    client_id = hashlib.sha1(f"{clean_name}:{datetime.now().isoformat()}".encode("utf-8")).hexdigest()[:8]
+    new_row = {
+        "내담자 ID": client_id,
+        "이름": clean_name,
+        "성별": str(gender or "기타/미상").strip(),
+        "연령대": str(age or "미상").strip() or "미상",
+        "지역": str(region or "미상").strip() or "미상",
+        "상담 유형": str(memo or "신규 등록").strip() or "신규 등록",
+        "최근 회기": "0회기",
+        "상태": "신규 등록",
+        "메모": str(memo or "").strip(),
+    }
+
+    for column in CLIENTS.columns:
+        if column not in new_row:
+            new_row[column] = ""
+
+    st.session_state.registered_clients.append(new_row.copy())
+    CLIENTS = pd.concat([CLIENTS, pd.DataFrame([new_row])], ignore_index=True)
+    st.session_state.selected_client = client_id
+    st.session_state.selected_session = "새 상담"
+    st.session_state.record_mode = "new"
+    st.session_state.dialogue_rows = DEFAULT_DIALOGUE.copy()
+    st.session_state.analysis_result = None
+    st.session_state.patient_home_tab = "내담자 정보"
+    go_page("내담자 홈")
+    st.success(f"{clean_name} 내담자를 등록했습니다.")
+    return True
 
 
 def get_client_row():
@@ -1044,6 +1072,39 @@ def get_client_row():
         return CLIENTS.iloc[0]
 
     return row.iloc[0]
+
+
+def get_client_display_name(client_row: pd.Series | None = None) -> str:
+    if client_row is None:
+        client_row = get_client_row()
+
+    return str(client_row.get("이름", client_row.get("내담자 ID", st.session_state.selected_client)))
+
+
+def _short_gender(value: Any) -> str:
+    text = str(value or "미상")
+
+    if text.startswith("여"):
+        return "여"
+    if text.startswith("남"):
+        return "남"
+
+    return text[:1] if text else "?"
+
+
+def _format_sidebar_client_label(client_id: str) -> str:
+    row = CLIENTS[CLIENTS["내담자 ID"] == client_id]
+
+    if row.empty:
+        return str(client_id)
+
+    client = row.iloc[0]
+    name = str(client.get("이름", client_id))
+    gender = _short_gender(client.get("성별", "미상"))
+    age = str(client.get("연령대", "미상"))
+    region = str(client.get("지역", "미상"))
+
+    return f"{name} · {gender}/{age}/{region}"
 
 
 def get_session_row():
@@ -1108,280 +1169,2219 @@ def add_mock_answer(user_prompt: str):
 PRIMARY = "#2563EB"
 PRIMARY_DARK = "#1E40AF"
 PRIMARY_LIGHT = "#EFF6FF"
-PRIMARY_SOFT = "#DBEAFE"
-CARD_BLUE = "#F3F8FF"
-CARD_BLUE_BORDER = "#D9EAFE"
+PRIMARY_SOFT = "#BFDBFE"
+CARD_BLUE = "#FFFFFF"
+CARD_BLUE_BORDER = "#E2E8F0"
 TEXT = "#0F172A"
 SUBTEXT = "#64748B"
 BORDER = "#E2E8F0"
 SIDEBAR_BG = "#F1F5F9"
+CHATBOT_ICON_PATH = Path(__file__).resolve().parent / "assets" / "chatbot.png"
+SEND_ICON_PATH = Path(__file__).resolve().parent / "assets" / "send_icon.png"
+MD_ICON_PATH = Path(__file__).resolve().parent / "assets" / "md.png"
+PDF_ICON_PATH = Path(__file__).resolve().parent / "assets" / "pdf Ribbon.png"
+DOCX_ICON_PATH = Path(__file__).resolve().parent / "assets" / "docx.png"
+
+
+def get_svg_data_uri(path: Path) -> str:
+    try:
+        encoded_svg = base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError:
+        return ""
+
+    return f"data:image/svg+xml;base64,{encoded_svg}"
+
+
+def get_png_data_uri(path: Path) -> str:
+    try:
+        encoded_png = base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError:
+        return ""
+
+    return f"data:image/png;base64,{encoded_png}"
 
 
 def apply_global_style():
+    chatbot_icon_data_uri = get_svg_data_uri(CHATBOT_ICON_PATH)
+
     st.markdown(
         f"""
         <style>
+        :root {{
+            --primary: {PRIMARY};
+            --primary-dark: {PRIMARY_DARK};
+            --primary-soft: {PRIMARY_LIGHT};
+            --text: {TEXT};
+            --subtext: {SUBTEXT};
+            --muted: #94A3B8;
+            --border: {BORDER};
+            --card: #FFFFFF;
+            --sidebar-bg: {SIDEBAR_BG};
+        }}
+
         html, body, [class*="css"] {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", sans-serif;
+            color: var(--text);
         }}
 
         .stApp {{
-            background: linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 44%);
+            background: #FFFFFF;
         }}
 
         .main .block-container {{
-            padding-top: 1.0rem;
-            padding-bottom: 2.5rem;
-            max-width: 1640px;
-            padding-left: 2.2rem;
-            padding-right: 2.2rem;
+            padding-top: 0.05rem;
+            padding-bottom: 0.5rem;
+            max-width: 1180px;
+            padding-left: 3rem;
+            padding-right: 3rem;
+            margin-left: auto;
+            margin-right: auto;
         }}
 
         section[data-testid="stSidebar"] {{
-            background: {SIDEBAR_BG};
-            border-right: 1px solid {BORDER};
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border);
+            box-shadow: 8px 0 24px rgba(15, 23, 42, 0.025);
         }}
 
         section[data-testid="stSidebar"] .block-container {{
-            padding: 1.65rem 1.35rem 1.25rem;
-            min-height: 100vh;
+            padding: 1.75rem 1.35rem 1.4rem !important;
+        }}
+
+        section[data-testid="stSidebar"] h1 {{
+            color: var(--primary-dark);
+            font-size: 1.34rem !important;
+            font-weight: 720 !important;
+            letter-spacing: -0.045em;
+            line-height: 1.12;
+            margin-bottom: 0.25rem;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] {{
+            color: var(--subtext);
+            font-size: 0.77rem;
+            line-height: 1.45;
         }}
 
         .sidebar-brand {{
-            font-size: 1.62rem;
-            font-weight: 760;
-            color: #2F3340;
-            letter-spacing: -0.04em;
-            margin-top: 0.1rem;
-            margin-bottom: 0.62rem;
+            font-size: 1.34rem !important;
+            font-weight: 720 !important;
+            color: var(--primary-dark) !important;
+            letter-spacing: -0.045em !important;
+            line-height: 1.12 !important;
+            margin-bottom: 0.25rem !important;
         }}
 
         .sidebar-subtitle {{
-            font-size: 0.92rem;
-            color: #7A808C;
-            line-height: 1.5;
-            margin-bottom: 1.5rem;
-            letter-spacing: -0.015em;
+            font-size: 0.77rem !important;
+            color: var(--subtext) !important;
+            font-weight: 400 !important;
+            line-height: 1.45 !important;
+            margin-bottom: 1rem !important;
         }}
 
-        .sidebar-profile-card {{
-            background: #FFFFFF;
-            border: 1px solid #D7E2F0;
-            border-radius: 1.05rem;
-            padding: 1rem 1.05rem;
-            display: flex;
-            align-items: center;
-            gap: 0.85rem;
-            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.035);
-            margin-bottom: 0.8rem;
+        .sidebar-profile-text {{
+            color: var(--text) !important;
+            font-size: 0.8rem !important;
+            line-height: 1.55 !important;
+            margin-top: 0.2rem !important;
+            margin-bottom: 1.08rem !important;
+            font-weight: 400 !important;
         }}
 
-        .sidebar-avatar {{
-            width: 3.05rem;
-            height: 3.05rem;
-            border-radius: 999px;
-            background: {PRIMARY};
-            color: #FFFFFF;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 800;
-            font-size: 1.28rem;
-            flex-shrink: 0;
-        }}
-
-        .sidebar-profile-name {{
-            font-size: 1.02rem;
-            font-weight: 720;
-            color: {TEXT};
-            letter-spacing: -0.035em;
-            margin-bottom: 0.18rem;
-        }}
-
-        .sidebar-profile-email {{
-            font-size: 0.78rem;
-            color: #64748B;
-            line-height: 1.3;
-        }}
-
-        .sidebar-plan-pill {{
-            border: 1px solid #BFDBFE;
-            background: #EFF6FF;
-            color: {PRIMARY_DARK};
-            border-radius: 999px;
-            padding: 0.68rem 0.9rem;
-            text-align: center;
-            font-size: 0.86rem;
-            font-weight: 720;
-            letter-spacing: -0.02em;
-            margin-bottom: 1.45rem;
+        .sidebar-profile-text strong {{
+            display: block;
+            font-size: 0.9rem !important;
+            color: var(--text) !important;
+            font-weight: 620 !important;
+            margin-bottom: 0.22rem !important;
         }}
 
         .sidebar-section-title {{
-            font-size: 1.02rem;
-            font-weight: 720;
-            color: {TEXT};
-            letter-spacing: -0.035em;
-            margin-bottom: 0.9rem;
+            font-size: 0.78rem !important;
+            font-weight: 600 !important;
+            color: var(--text) !important;
+            margin: 1.12rem 0 0.55rem !important;
+            letter-spacing: -0.01em !important;
         }}
 
-        .sidebar-label {{
-            font-size: 0.82rem;
-            color: #64748B;
-            font-weight: 540;
-            margin-bottom: 0.4rem;
+        section[data-testid="stSidebar"] div[data-testid="stAlert"] {{
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: var(--subtext);
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.025);
         }}
 
-        .sidebar-spacer {{
-            height: 11.5rem;
+        section[data-testid="stSidebar"] h3 {{
+            color: var(--text);
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            margin-top: 1.12rem;
         }}
 
-        section[data-testid="stSidebar"] hr {{
-            margin: 1.65rem 0;
-            border-color: #C9D2DE;
+        section[data-testid="stSidebar"] label {{
+            color: var(--subtext) !important;
+            font-size: 0.74rem !important;
+            font-weight: 500 !important;
         }}
 
         section[data-testid="stSidebar"] div[data-baseweb="select"] > div {{
-            border-radius: 0.75rem;
-            border-color: #E2E8F0;
-            min-height: 2.75rem;
-            background: #FFFFFF;
+            border-radius: 11px !important;
+            border-color: var(--border) !important;
+            min-height: 2.42rem !important;
+            background: #FFFFFF !important;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.025) !important;
+            cursor: pointer !important;
         }}
 
-        section[data-testid="stSidebar"] div.stButton > button:first-child {{
-            min-height: 2.55rem;
-            font-size: 0.86rem;
-            font-weight: 600;
-            background: #FFFFFF;
-            color: {TEXT};
-            border-color: #CBD5E1;
-            box-shadow: none;
+        section[data-testid="stSidebar"] div[data-baseweb="select"] * {{
+            cursor: pointer !important;
+        }}
+
+        section[data-testid="stSidebar"] hr {{
+            margin: 1.25rem 0 !important;
+            border-color: #CBD5E1 !important;
         }}
 
         .app-title {{
-            font-size: 1.72rem;
-            font-weight: 700;
-            color: {TEXT};
+            font-size: 1.7rem;
+            font-weight: 640;
+            color: var(--text);
             letter-spacing: -0.045em;
             margin-bottom: 0.35rem;
         }}
 
         .section-title {{
+            font-size: 1.65rem;
+            font-weight: 660;
+            color: var(--text);
+            letter-spacing: -0.05em;
+            margin-top: 0.4rem;
+            margin-bottom: 0.45rem;
+        }}
+
+        .session-detail-section-title {{
+            color: var(--text);
             font-size: 1.18rem;
-            font-weight: 650;
-            color: {TEXT};
-            letter-spacing: -0.035em;
-            margin-top: 0.1rem;
+            font-weight: 560;
+            letter-spacing: -0.04em;
+            margin-top: 0.25rem;
             margin-bottom: 0.55rem;
         }}
 
         .page-desc {{
-            color: {SUBTEXT};
+            color: var(--subtext);
             font-size: 0.9rem;
             margin-bottom: 1rem;
+            line-height: 1.58;
         }}
 
         .tag {{
-            display: inline-block;
-            padding: 0.22rem 0.65rem;
+            display: inline-flex;
+            align-items: center;
+            padding: 0.2rem 0.55rem;
             border-radius: 999px;
-            background: {PRIMARY_LIGHT};
-            color: {PRIMARY_DARK};
-            font-size: 0.76rem;
-            font-weight: 620;
-            margin-right: 0.35rem;
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+            font-size: 0.72rem;
+            font-weight: 500;
+            margin-right: 0.34rem;
             margin-bottom: 0.2rem;
-            border: 1px solid {PRIMARY_SOFT};
+            border: 1px solid var(--primary-soft);
         }}
 
         .hero-card {{
-            background: linear-gradient(135deg, #EFF6FF 0%, #F8FAFC 65%, #FFFFFF 100%);
-            border: 1px solid #BFDBFE;
-            border-radius: 1.15rem;
-            padding: 1.15rem 1.3rem;
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 1.05rem 1.1rem;
             margin-bottom: 1.25rem;
-            box-shadow: 0 8px 24px rgba(37, 99, 235, 0.035);
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.032);
         }}
 
         .hero-title {{
-            font-size: 1.04rem;
-            font-weight: 720;
-            color: {PRIMARY_DARK};
+            font-size: 0.98rem;
+            font-weight: 600;
+            color: var(--text);
             margin-bottom: 0.25rem;
+            letter-spacing: -0.03em;
         }}
 
         .hero-desc {{
-            color: {SUBTEXT};
-            font-size: 0.9rem;
-            line-height: 1.55;
+            color: var(--subtext);
+            font-size: 0.88rem;
+            line-height: 1.62;
         }}
 
         .summary-card {{
-            background: {CARD_BLUE};
-            border: 1px solid {CARD_BLUE_BORDER};
-            border-radius: 0.95rem;
-            padding: 0.95rem 1.05rem;
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 1rem 1.05rem;
             min-height: 132px;
-            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.025);
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.032);
         }}
 
         .summary-card-title {{
             font-size: 0.86rem;
-            font-weight: 720;
-            color: {PRIMARY_DARK};
+            font-weight: 600;
+            color: var(--primary-dark);
             letter-spacing: -0.015em;
             margin-bottom: 0.72rem;
             padding-bottom: 0.35rem;
-            border-bottom: 1px solid #D6E6FF;
+            border-bottom: 1px solid var(--border);
         }}
 
         .summary-card-body {{
             font-size: 0.82rem;
             font-weight: 480;
-            color: #334155;
+            color: var(--text);
             line-height: 1.65;
         }}
 
-        div.stButton > button:first-child {{
+        .patient-kicker {{
+            color: var(--primary);
+            font-size: 0.82rem;
+            font-weight: 560;
+            margin-bottom: 0.4rem;
+            letter-spacing: -0.02em;
+        }}
+
+        .patient-title {{
+            color: var(--text);
+            font-size: 1.55rem;
+            font-weight: 580;
+            letter-spacing: -0.055em;
+            line-height: 1.18;
+            margin-bottom: 0.2rem;
+        }}
+
+        .patient-desc {{
+            color: var(--subtext);
+            font-size: 0.93rem;
+            line-height: 1.6;
+            margin-bottom: 1.15rem;
+            font-weight: 400;
+        }}
+
+        .profile-card,
+        .memo-card,
+        .risk-card,
+        .stat-card,
+        .session-detail-header,
+        .report-box {{
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.032);
+        }}
+
+        .profile-card {{
+            padding: 1.15rem 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }}
+
+        .profile-avatar {{
+            width: 62px;
+            height: 62px;
             border-radius: 999px;
-            min-height: 2.45rem;
+            background: var(--primary);
+            color: #FFFFFF;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            font-weight: 680;
+            flex-shrink: 0;
+            box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18);
+        }}
+
+        .profile-summary {{
+            font-size: 1rem;
+            color: var(--text);
+            font-weight: 580;
+            margin-bottom: 0.28rem;
+            letter-spacing: -0.025em;
+        }}
+
+        .profile-meta {{
+            color: var(--subtext);
+            font-size: 0.84rem;
+            line-height: 1.55;
+            font-weight: 400;
+        }}
+
+        .status-tag {{
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+            border: 1px solid var(--primary-soft);
+            padding: 0.14rem 0.48rem;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-left: 0.45rem;
+            vertical-align: middle;
+        }}
+
+        .home-section-title {{
+            color: var(--text);
+            font-size: 0.96rem;
+            font-weight: 540;
+            margin: 0.9rem 0 0.65rem;
+            letter-spacing: -0.025em;
+        }}
+
+        .home-card-subtle {{
+            color: var(--subtext);
+            font-size: 0.74rem;
+            font-weight: 500;
+            margin-bottom: 0.28rem;
+        }}
+
+        .home-card-title {{
+            color: var(--text);
             font-size: 0.88rem;
-            line-height: 1.2;
+            font-weight: 580;
+            margin-bottom: 0.45rem;
+        }}
+
+        .memo-card,
+        .risk-card {{
+            padding: 0.95rem 1.05rem;
+            min-height: 124px;
+            color: var(--text);
+            font-size: 0.88rem;
+            line-height: 1.58;
+        }}
+
+        .risk-ok {{
+            color: #059669;
+        }}
+
+        .risk-alert {{
+            color: #DC2626;
+        }}
+
+        .stat-card {{
+            padding: 0.85rem 1rem;
+            min-height: 124px;
+        }}
+
+        .home-stats-caption {{
+            margin-top: 0.65rem;
+            color: var(--subtext);
+            font-size: 0.82rem;
+            line-height: 1.5;
+        }}
+
+        .stat-label {{
+            color: var(--subtext);
+            font-size: 0.78rem;
+            font-weight: 500;
+            margin-bottom: 0.32rem;
+        }}
+
+        .stat-value {{
+            color: var(--text);
+            font-size: 1.72rem;
+            font-weight: 580;
+            line-height: 1.1;
+            letter-spacing: -0.045em;
+            margin-top: 0.8rem;
+        }}
+
+        .session-detail-header,
+        .report-box {{
+            padding: 1rem 1.05rem;
+            margin-bottom: 1rem;
+        }}
+
+        .session-detail-header {{
+            margin-top: 1.05rem;
+            margin-bottom: 1.55rem;
+            padding: 1.25rem 1.25rem;
+        }}
+
+        .journal-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 1.25rem 1.35rem;
+            margin-top: 0.2rem;
+        }}
+
+        .journal-label {{
+            color: var(--subtext);
+            font-size: 0.74rem;
+            font-weight: 520;
+            margin-bottom: 0.28rem;
+        }}
+
+        .journal-value {{
+            color: var(--text);
+            font-size: 0.88rem;
+            font-weight: 450;
+            line-height: 1.48;
+            word-break: keep-all;
+        }}
+
+        .report-box {{
+            min-height: 260px;
+        }}
+
+        .report-box-title {{
+            color: var(--text);
+            font-size: 0.98rem;
+            font-weight: 580;
+            margin-bottom: 0.55rem;
+            letter-spacing: -0.02em;
+        }}
+
+        .report-box-body {{
+            color: var(--text);
+            font-size: 0.88rem;
+            line-height: 1.68;
+            white-space: pre-wrap;
+        }}
+
+        .script-box {{
+            background: #F8FAFC;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.05rem 1.1rem;
+            min-height: 230px;
+            color: var(--text);
+            font-size: 0.9rem;
+            line-height: 1.72;
+            white-space: pre-wrap;
+        }}
+
+        .record-list-row {{
+            display: grid;
+            grid-template-columns: 0.12fr 0.18fr 0.42fr 0.18fr;
+            gap: 1rem;
+            align-items: center;
+            color: var(--text);
+            font-size: 0.9rem;
+            font-weight: 480;
+        }}
+
+        .record-list-meta {{
+            color: var(--subtext);
+            font-weight: 400;
+        }}
+
+        .new-session-title {{
+            color: var(--text);
+            font-size: 1rem;
+            font-weight: 580;
+        }}
+
+        .new-session-card-head {{
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.95rem;
+        }}
+
+        .new-session-card-icon {{
+            width: 2.15rem;
+            height: 2.15rem;
+            border-radius: 10px;
+            background: #EFF6FF;
+            border: 1px solid #BFDBFE;
+            color: #2563EB;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.95rem;
+            font-weight: 700;
+            flex-shrink: 0;
+        }}
+
+        .new-session-card-title {{
+            color: #0F172A;
+            font-size: 1rem;
+            font-weight: 620;
+            letter-spacing: -0.025em;
+            line-height: 1.25;
+        }}
+
+        .new-session-card-desc {{
+            color: #64748B;
+            font-size: 0.82rem;
+            line-height: 1.45;
+            margin-top: 0.15rem;
+        }}
+
+        .new-session-mode-pills-marker {{
+            display: none;
+        }}
+
+        div[data-testid="stVerticalBlock"]:has(.new-session-mode-pills-marker) div[data-testid="stButtonGroup"] {{
+            background: #F8FAFC !important;
+            border: 1px solid #E2E8F0 !important;
+            border-radius: 999px !important;
+            padding: 0.18rem !important;
+            display: inline-flex !important;
+            width: fit-content !important;
+        }}
+
+        div[data-testid="stVerticalBlock"]:has(.new-session-mode-pills-marker) button[data-testid="stBaseButton-pills"],
+        div[data-testid="stVerticalBlock"]:has(.new-session-mode-pills-marker) button[data-testid="stBaseButton-pillsActive"] {{
+            border-radius: 999px !important;
+            min-height: 2rem !important;
+            height: 2rem !important;
+            padding: 0 1.25rem !important;
+            font-size: 0.82rem !important;
+            font-weight: 560 !important;
+            border: 0 !important;
+            box-shadow: none !important;
+        }}
+
+        div[data-testid="stVerticalBlock"]:has(.new-session-mode-pills-marker) button[data-testid="stBaseButton-pills"] {{
+            background: transparent !important;
+            color: #334155 !important;
+        }}
+
+        div[data-testid="stVerticalBlock"]:has(.new-session-mode-pills-marker) button[data-testid="stBaseButton-pillsActive"] {{
+            background: #2563EB !important;
+            color: #FFFFFF !important;
+            box-shadow: 0 6px 14px rgba(37, 99, 235, 0.18) !important;
+        }}
+
+        div[data-testid="stVerticalBlock"]:has(.new-session-mode-pills-marker) button[data-testid="stBaseButton-pillsActive"] * {{
+            color: #FFFFFF !important;
+        }}
+
+        .chart-panel-title {{
+            color: var(--text);
+            font-size: 0.98rem;
+            font-weight: 580;
+            margin-bottom: 0.35rem;
+            letter-spacing: -0.02em;
+        }}
+
+        .chart-panel-desc {{
+            color: var(--subtext);
+            font-size: 0.82rem;
+            margin-bottom: 0.75rem;
+        }}
+
+        .dashboard-section-gap {{
+            height: 1.35rem;
+        }}
+
+        .risk-metric-card {{
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1rem;
+            box-shadow: 0px 4px 16px rgba(15, 23, 42, 0.035);
+        }}
+
+        .risk-metric-label {{
+            color: var(--subtext);
+            font-size: 0.78rem;
+            font-weight: 520;
+        }}
+
+        .risk-metric-value {{
+            color: var(--text);
+            font-size: 1.45rem;
+            font-weight: 700;
+            line-height: 1.15;
+            margin-top: 0.28rem;
+        }}
+
+        .risk-metric-status {{
+            display: inline-flex;
+            margin-top: 0.55rem;
+            color: var(--primary-dark);
+            background: var(--primary-soft);
+            border-radius: 999px;
+            padding: 0.18rem 0.5rem;
+            font-size: 0.72rem;
+            font-weight: 540;
+        }}
+
+        .ai-summary-section {{
+            margin-top: 1.15rem;
+        }}
+
+        .ai-summary-title {{
+            color: var(--text);
+            font-size: 1rem;
+            font-weight: 620;
+            margin-bottom: 0.75rem;
+        }}
+
+        .ai-summary-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.9rem;
+        }}
+
+        .ai-summary-card {{
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 0.95rem;
+            min-height: 190px;
+        }}
+
+        .ai-summary-head {{
+            display: flex;
+            gap: 0.55rem;
+            align-items: center;
+            margin-bottom: 0.65rem;
+        }}
+
+        .ai-summary-icon {{
+            width: 1.7rem;
+            height: 1.7rem;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+            font-weight: 700;
+        }}
+
+        .ai-summary-card-title {{
+            color: var(--text);
+            font-size: 0.9rem;
             font-weight: 600;
+        }}
+
+        .ai-summary-list {{
+            margin: 0;
+            padding-left: 1.05rem;
+            color: var(--text);
+            font-size: 0.82rem;
+            line-height: 1.65;
+        }}
+
+        .ai-summary-note {{
+            color: var(--subtext);
+            background: #F8FAFC;
+            border-radius: 12px;
+            padding: 0.62rem;
+            margin-top: 0.7rem;
+            font-size: 0.78rem;
+            line-height: 1.5;
+        }}
+
+        .ai-summary-footnote {{
+            color: var(--subtext);
+            font-size: 0.76rem;
+            margin-top: 0.65rem;
+        }}
+
+        .dashboard-side-note {{
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1rem 1.05rem;
+            min-height: 285px;
+        }}
+
+        .dashboard-side-note-title {{
+            color: var(--text);
+            font-weight: 600;
+            margin-bottom: 0.6rem;
+        }}
+
+        .dashboard-side-note-body,
+        .dashboard-side-note-list {{
+            color: var(--subtext);
+            font-size: 0.84rem;
+            line-height: 1.65;
+        }}
+
+        .factor-category-marker,
+        .factor-category-is-selected,
+        .factor-category-is-unselected {{
+            display: none;
+        }}
+
+        div[data-testid="stMarkdownContainer"]:has(.factor-category-marker),
+        div[data-testid="stMarkdownContainer"]:has(.factor-category-is-selected),
+        div[data-testid="stMarkdownContainer"]:has(.factor-category-is-unselected) {{
+            display: none !important;
+            height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-marker) div.stButton {{
+            width: fit-content !important;
+            margin-right: 0.45rem !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child {{
+            width: auto !important;
+            min-width: auto !important;
+            min-height: 2.15rem !important;
+            height: 2.15rem !important;
+            border-radius: 999px !important;
+            padding: 0 0.92rem !important;
+            font-size: 0.82rem !important;
+            font-weight: 520 !important;
+            line-height: 1 !important;
+            white-space: nowrap !important;
+            box-shadow: none !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child p,
+        div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child span {{
+            font-size: 0.82rem !important;
+            font-weight: 520 !important;
+            line-height: 1 !important;
+            margin: 0 !important;
+            white-space: nowrap !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child {{
+            background: #60A5FA !important;
+            border: 1px solid #60A5FA !important;
+            color: #FFFFFF !important;
+            box-shadow: 0 6px 14px rgba(96, 165, 250, 0.18) !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child p,
+        div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child span {{
+            color: #FFFFFF !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-is-unselected) div.stButton > button:first-child {{
+            background: #FFFFFF !important;
+            border: 1px solid #CBD5E1 !important;
+            color: #0F172A !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-is-unselected) div.stButton > button:first-child:hover {{
+            background: #EFF6FF !important;
+            border-color: #93C5FD !important;
+            color: #2563EB !important;
+        }}
+
+        .report-section-head {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.65rem;
+        }}
+
+        .report-section-title {{
+            color: var(--text);
+            font-size: 0.96rem;
+            font-weight: 600;
+        }}
+
+        .report-edit-badge {{
+            display: inline-flex;
+            margin-left: 0.45rem;
+            padding: 0.14rem 0.42rem;
+            border-radius: 999px;
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+            font-size: 0.68rem;
+            font-weight: 560;
+        }}
+
+        .report-plan-panel,
+        .report-chart-preview {{
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1rem 1.05rem;
+            margin-top: 1rem;
+        }}
+
+        .report-plan-title {{
+            color: var(--text);
+            font-weight: 620;
+            margin-bottom: 0.75rem;
+        }}
+
+        .report-plan-grid,
+        .chart-placeholder-grid {{
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.85rem;
+        }}
+
+        .report-plan-card,
+        .chart-placeholder-card {{
+            background: #F8FAFC;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 0.85rem;
+            color: var(--subtext);
+            font-size: 0.82rem;
+            line-height: 1.55;
+        }}
+
+        .report-plan-card-title {{
+            color: var(--text);
+            font-weight: 600;
+            margin-bottom: 0.45rem;
+        }}
+
+        .report-plan-card ul {{
+            margin: 0;
+            padding-left: 1rem;
+        }}
+
+        .report-footnote {{
+            color: var(--subtext);
+            font-size: 0.78rem;
+            margin-top: 1rem;
+        }}
+
+        .report-preview-shell {{
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 18px;
+            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+            padding: 2rem 2.25rem;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }}
+
+        .report-preview-title {{
+            text-align: center;
+            color: #0F172A;
+            font-size: 1.9rem;
+            font-weight: 720;
+            letter-spacing: -0.055em;
+            margin-bottom: 0.3rem;
+        }}
+
+        .report-preview-date {{
+            text-align: right;
+            color: #64748B;
+            font-size: 0.78rem;
+            margin-bottom: 0.8rem;
+        }}
+
+        .report-preview-divider {{
+            height: 1px;
+            background: #E2E8F0;
+            margin: 0.7rem 0 1rem;
+        }}
+
+        .report-preview-chip-row {{
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 0.55rem;
+            margin-bottom: 1rem;
+        }}
+
+        .report-preview-chip {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.28rem;
+            border: 1px solid #BFDBFE;
+            background: #F8FAFC;
+            color: #1E40AF;
+            border-radius: 999px;
+            padding: 0.38rem 0.75rem;
+            font-size: 0.78rem;
+            font-weight: 570;
+        }}
+
+        .report-preview-summary {{
+            background: #F1F7FF;
+            border: 1px solid #D6E8FF;
+            border-radius: 14px;
+            padding: 1rem 1.05rem;
+            margin: 1rem 0 1.4rem;
+        }}
+
+        .session-card-row {{
+            display: grid;
+            grid-template-columns: 0.13fr 0.18fr 0.35fr 0.2fr 0.14fr;
+            gap: 1rem;
+            align-items: center;
+            width: 100%;
+        }}
+
+        .session-card-session-num {{
+            color: var(--text);
+            font-weight: 540;
+            font-size: 0.9rem;
+        }}
+
+        .session-card-date {{
+            color: var(--subtext);
+            font-size: 0.85rem;
+            font-weight: 450;
+        }}
+
+        .session-card-content {{
+            display: flex;
+            flex-direction: column;
+            gap: 0.08rem;
+            justify-content: center;
+            transform: translateY(-0.30rem);
+        }}
+
+        .session-card-title {{
+            color: var(--text);
+            font-weight: 500;
+            font-size: 0.97rem;
+            line-height: 1.25;
+            letter-spacing: -0.025em;
+        }}
+
+        .session-card-type {{
+            color: var(--subtext);
+            font-size: 0.72rem;
+            font-weight: 400;
+            line-height: 1.2;
+            margin-top: 0;
+        }}
+
+        .session-card-status-wrapper {{
+            display: grid;
+            place-items: center;
+            justify-content: center;
+            height: 100%;
+            min-height: 3.8rem;
+            transform: translateY(-0.5rem);
+        }}
+
+        .session-card-status-badge {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+            border-radius: 999px;
+            padding: 0.18rem 0.5rem;
+            font-size: 0.72rem;
+            font-weight: 540;
+            white-space: nowrap;
+            border: 0;
+            box-shadow: none;
+        }}
+
+
+
+        /* 상담내역 카드 내부 구성 */
+        .record-session-number-box {{
+            width: 4.25rem;
+            height: 3.35rem;
+            border-radius: 13px;
+            background: #EFF6FF;
+            color: #1D4ED8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.16rem;
+            font-weight: 600;
+            letter-spacing: -0.055em;
+        }}
+
+        .record-session-title {{
+            color: #0F172A;
+            font-size: 1.02rem;
+            font-weight: 520;
+            letter-spacing: -0.045em;
+            line-height: 1.25;
+            margin-bottom: 0.26rem;
+        }}
+
+        .record-session-meta {{
+            color: #64748B;
+            font-size: 0.78rem;
+            font-weight: 430;
+            line-height: 1.4;
+        }}
+
+        .record-session-status-wrap {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 3.35rem;
+        }}
+
+        .record-open-button-marker {{
+            display: none;
+        }}
+
+        div[data-testid="column"]:has(.record-open-button-marker) {{
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-end !important;
+        }}
+
+        div[data-testid="column"]:has(.record-open-button-marker) div.stButton > button:first-child {{
+            width: 100% !important;
+            height: 2.25rem !important;
+            min-height: 2.25rem !important;
+            border-radius: 11px !important;
+            border: 1px solid #2563EB !important;
+            background: #FFFFFF !important;
+            color: #1D4ED8 !important;
+            font-size: 0.55rem !important;
+            font-weight: 580 !important;
+            box-shadow: none !important;
+        }}
+
+        div[data-testid="column"]:has(.record-open-button-marker) div.stButton > button:first-child:hover {{
+            background: #EFF6FF !important;
+            border-color: #1D4ED8 !important;
+            color: #1D4ED8 !important;
+        }}
+
+        div[data-testid="column"]:has(.record-open-button-marker) div.stButton > button:first-child p {{
+            color: #1D4ED8 !important;
+            font-weight: 580 !important;
+        }}
+
+        /* 상담내역 카드 내부 요소 세로 위치 보정 */
+        .record-session-number-box {{
+            transform: translateY(-0.50rem);
+        }}
+
+        .record-session-title,
+        .record-session-meta {{
+            transform: translateY(-0.40rem);
+        }}
+
+        .record-session-status-wrap {{
+            transform: translateY(-0.50rem);
+        }}
+
+        div[data-testid="column"]:has(.record-open-button-marker) div.stButton {{
+            transform: translateY(-0.50rem) !important;
+        }}
+
+
+        .session-card-status-complete {{
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+        }}
+
+        .session-card-status-review {{
+            background: #FFF7ED;
+            color: #C2410C;
+        }}
+
+        .session-card-status-draft {{
+            background: #F1F5F9;
+            color: #475569;
+        }}
+
+
+        .report-preview-summary-title {{
+            color: #1E40AF;
+            font-size: 0.94rem;
+            font-weight: 660;
+            margin-bottom: 0.5rem;
+        }}
+
+        .report-preview-summary-body {{
+            color: #0F172A;
+            font-size: 0.9rem;
+            line-height: 1.7;
+            white-space: pre-wrap;
+        }}
+
+        .report-preview-section {{
+            margin-top: 1.15rem;
+        }}
+
+        .report-preview-section-title {{
+            color: #1E3A8A;
+            font-size: 1rem;
+            font-weight: 680;
+            letter-spacing: -0.03em;
+            padding-bottom: 0.45rem;
+            border-bottom: 1px dashed #CBD5E1;
+            margin-bottom: 0.6rem;
+        }}
+
+        .report-preview-section-body {{
+            color: #0F172A;
+            font-size: 0.88rem;
+            line-height: 1.75;
+            white-space: pre-wrap;
+        }}
+
+        .report-preview-chart-panel {{
+            background: #F8FAFC;
+            border: 1px solid #E2E8F0;
+            border-radius: 14px;
+            padding: 0.9rem;
+            margin-top: 1.4rem;
+        }}
+
+        .report-preview-chart-title {{
+            color: #1E40AF;
+            font-size: 0.92rem;
+            font-weight: 660;
+            margin-bottom: 0.65rem;
+        }}
+
+        .report-preview-chart-grid {{
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.75rem;
+        }}
+
+        .report-preview-mini-chart {{
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            min-height: 130px;
+            padding: 0.8rem;
+            color: #64748B;
+            font-size: 0.78rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }}
+
+        .report-preview-footer-note {{
+            background: #EFF6FF;
+            border: 1px solid #BFDBFE;
+            color: #1E40AF;
+            border-radius: 12px;
+            padding: 0.75rem 0.9rem;
+            font-size: 0.82rem;
+            font-weight: 500;
+            margin-top: 1rem;
+        }}
+
+        .chat-guide-banner {{
+            background: var(--primary-soft);
+            border: 1px solid #BFDBFE;
+            color: var(--primary-dark);
+            border-radius: 14px;
+            padding: 0.85rem 1rem;
+            font-size: 0.84rem;
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }}
+
+        .chat-page-card {{
+            background: transparent !important;
+            border: none !important;
+            border-radius: 0 !important;
+            padding: 0.25rem 0.25rem 0.85rem 0.25rem !important;
+            margin-bottom: 0.85rem !important;
+            min-height: 58vh;
+            box-sizing: border-box;
+        }}
+
+        .chat-row {{
+            display: flex;
+            gap: 0.65rem;
+            margin-bottom: 0.85rem;
+        }}
+
+        .chat-row.user {{
+            justify-content: flex-end;
+        }}
+
+        .chat-avatar {{
+            width: 2rem;
+            height: 2rem;
+            border-radius: 999px;
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+        }}
+
+        .chat-bubble-wrap {{
+            max-width: 76%;
+        }}
+
+        .chat-bubble {{
+            background: #F8FAFC;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 0.78rem 0.9rem;
+            color: var(--text);
+            font-size: 0.88rem;
+            line-height: 1.65;
+        }}
+
+        .chat-row.user .chat-bubble {{
+            background: var(--primary);
+            color: #FFFFFF;
+            border-color: var(--primary);
+        }}
+
+        .chat-time {{
+            color: var(--muted);
+            font-size: 0.7rem;
+            margin-top: 0.25rem;
+        }}
+
+        .chat-row.user .chat-time {{
+            text-align: right;
+        }}
+
+        .chat-source-row {{
+            margin-top: 0.6rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }}
+
+        .chat-source-chip {{
+            background: #FFFFFF;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 0.16rem 0.42rem;
+            color: var(--subtext);
+            font-size: 0.7rem;
+        }}
+
+        .quick-question-title {{
+            color: var(--text);
+            font-size: 0.9rem;
+            font-weight: 650;
+            margin: 1rem 0 0.55rem;
+        }}
+
+        .quick-question-marker,
+        .chat-input-marker,
+        .chat-send-marker,
+        .chat-composer-anchor {{
+            display: none;
+        }}
+
+        .st-key-chat_composer_bar {{
+            position: relative !important;
+            width: 100% !important;
+            z-index: 120 !important;
+            background: rgba(255, 255, 255, 0.98) !important;
+            border-top: 1px solid #EEF2F7 !important;
+            padding: 0.2rem 0 0.35rem 0 !important;
+            margin: 0 !important;
+            box-sizing: border-box !important;
+            transform: translateY(-0.10rem) !important;
+        }}
+
+        .st-key-chat_composer_bar > div[data-testid="stVerticalBlock"] {{
+            width: 100% !important;
+            max-width: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            box-sizing: border-box !important;
+        }}
+
+        .st-key-chat_composer_bar .quick-question-title {{
+            margin-top: 0 !important;
+        }}
+
+        div[data-testid="column"]:has(.chat-input-marker) {{
+            padding-right: 0 !important;
+            position: relative !important;
+            z-index: 1 !important;
+        }}
+
+        div[data-testid="column"]:has(.chat-input-marker) div[data-baseweb="input"] {{
+            height: 2.65rem !important;
+            min-height: 2.65rem !important;
+            border-radius: 999px !important;
+            background: #FFFFFF !important;
+            border: 1px solid #E2E8F0 !important;
+            box-shadow: 0 10px 22px rgba(15, 23, 42, 0.07) !important;
+        }}
+
+        div[data-testid="column"]:has(.chat-input-marker) input {{
+            height: 2.65rem !important;
+            min-height: 2.65rem !important;
+            color: var(--text) !important;
+            font-size: 0.84rem !important;
+            padding-left: 0.95rem !important;
+            padding-right: 0.95rem !important;
+        }}
+
+        div[data-testid="column"]:has(.chat-input-marker) div[data-baseweb="input"]:hover {{
+            background: #FFFFFF !important;
+            border-color: #CBD5E1 !important;
+        }}
+
+        div[data-testid="column"]:has(.chat-send-marker) {{
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-end !important;
+            position: relative !important;
+            z-index: 3 !important;
+            overflow: visible !important;
+            margin-left: 0 !important; /* removed negative margin so button stays inside composer */
+            min-width: 4rem !important;
+            padding-top: 0 !important;
+        }}
+
+        div[data-testid="column"]:has(.chat-send-marker) div.stButton > button:first-child,
+        .st-key-chatbot_send button {{
+            width: 2.65rem !important;
+            min-width: 2.65rem !important;
+            max-width: 2.65rem !important;
+            height: 2.65rem !important;
+            min-height: 2.65rem !important;
+            border-radius: 999px !important;
+            border: 1px solid #4F63F6 !important;
+            background: #4F63F6 !important;
+            padding: 0 !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 0 12px 24px rgba(79, 99, 246, 0.26) !important;
+            transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease !important;
+        }}
+
+        div[data-testid="column"]:has(.chat-send-marker) div.stButton > button:first-child:hover,
+        .st-key-chatbot_send button:hover {{
+            background: #3B4FE8 !important;
+            border-color: #3B4FE8 !important;
+            transform: translateY(-1px) !important;
+            box-shadow: 0 14px 28px rgba(79, 99, 246, 0.32) !important;
+        }}
+
+        div[data-testid="column"]:has(.chat-send-marker) div.stButton > button:first-child p,
+        .st-key-chatbot_send button p {{
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 100% !important;
+            line-height: 1 !important;
+            margin: 0 !important;
+        }}
+
+        div[data-testid="column"]:has(.chat-send-marker) div.stButton > button:first-child img,
+        .st-key-chatbot_send button img {{
+            width: 1.22rem !important;
+            height: 1.22rem !important;
+            object-fit: contain !important;
+            display: block !important;
+        }}
+
+        div.stButton > button:first-child {{
+            border-radius: 11px;
+            min-height: 2.35rem;
+            font-size: 0.84rem;
+            line-height: 1.2;
+            font-weight: 480;
             border: 1px solid #CBD5E1;
-            color: {TEXT};
+            color: var(--text);
             background: #FFFFFF;
             white-space: nowrap;
+            box-shadow: none;
         }}
 
         div.stButton > button:hover {{
-            border-color: {PRIMARY};
-            color: {PRIMARY_DARK};
-            background-color: {PRIMARY_LIGHT};
+            border-color: var(--primary);
+            color: var(--primary-dark);
+            background-color: var(--primary-soft);
         }}
 
         div.stButton > button[kind="primary"] {{
-            background: {PRIMARY};
-            border-color: {PRIMARY};
-            color: white;
-            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+            background: var(--primary) !important;
+            border-color: var(--primary) !important;
+            color: white !important;
+            border-radius: 11px;
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.14);
+        }}
+
+        div.stButton > button[kind="primary"] p {{
+            color: #FFFFFF !important;
         }}
 
         div.stDownloadButton > button:first-child {{
-            border-radius: 999px;
+            border-radius: 11px;
             min-height: 2.35rem;
-            font-size: 0.88rem;
-            font-weight: 600;
+            font-size: 0.84rem;
+            font-weight: 500;
             border: 1px solid #CBD5E1;
+        }}
+
+        div.stDownloadButton > button:first-child p {{
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 0.38rem !important;
+            white-space: nowrap !important;
+        }}
+
+        div.stDownloadButton > button:first-child img {{
+            width: 1rem !important;
+            height: 1rem !important;
+            object-fit: contain !important;
+            display: inline-block !important;
+        }}
+
+        section[data-testid="stSidebar"] input {{
+            border-radius: 11px !important;
+            font-size: 0.82rem !important;
+            font-weight: 400 !important;
+            background: #FFFFFF !important;
+        }}
+
+        section[data-testid="stSidebar"] details {{
+            border-radius: 11px;
+        }}
+
+        section[data-testid="stSidebar"] div.stButton > button:first-child {{
+            display: flex !important;
+            min-height: 2.35rem !important;
+            height: 2.35rem !important;
+            border-radius: 9px !important;
+            border: 1px solid transparent !important;
+            background: transparent !important;
+            color: #0F172A !important;
+            box-shadow: none !important;
+            justify-content: flex-start !important;
+            padding-left: 0.82rem !important;
+            padding-right: 0.82rem !important;
+            font-size: 0.9rem !important;
+            font-weight: 430 !important;
+            letter-spacing: -0.025em !important;
+            margin-bottom: 0.25rem !important;
+            text-align: left !important;
+        }}
+
+        section[data-testid="stSidebar"] div.stButton > button:first-child p {{
+            font-size: 0.9rem !important;
+            font-weight: 430 !important;
+            color: inherit !important;
+            width: 100% !important;
+            text-align: left !important;
+        }}
+
+        section[data-testid="stSidebar"] div.stButton > button:first-child div[data-testid="stMarkdownContainer"] {{
+            width: 100% !important;
+            text-align: left !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-side_nav_home button,
+        section[data-testid="stSidebar"] .st-key-side_nav_records button,
+        section[data-testid="stSidebar"] .st-key-side_nav_dashboard button,
+        section[data-testid="stSidebar"] .st-key-side_nav_report button,
+        section[data-testid="stSidebar"] .st-key-side_nav_chatbot button,
+        section[data-testid="stSidebar"] .st-key-side_nav_settings button {{
+            justify-content: flex-start !important;
+            text-align: left !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-side_nav_home button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_records button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_dashboard button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_report button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_chatbot button div[data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] .st-key-side_nav_settings button div[data-testid="stMarkdownContainer"] {{
+            display: flex !important;
+            justify-content: flex-start !important;
+            align-items: center !important;
+            width: 100% !important;
+            text-align: left !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-side_nav_home button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_records button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_dashboard button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_report button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_chatbot button p,
+        section[data-testid="stSidebar"] .st-key-side_nav_settings button p {{
+            width: 100% !important;
+            text-align: left !important;
+            margin-left: 0 !important;
+            margin-right: auto !important;
+        }}
+
+        section[data-testid="stSidebar"] .st-key-side_nav_home button *,
+        section[data-testid="stSidebar"] .st-key-side_nav_records button *,
+        section[data-testid="stSidebar"] .st-key-side_nav_dashboard button *,
+        section[data-testid="stSidebar"] .st-key-side_nav_report button *,
+        section[data-testid="stSidebar"] .st-key-side_nav_chatbot button *,
+        section[data-testid="stSidebar"] .st-key-side_nav_settings button * {{
+            text-align: left !important;
+        }}
+
+        section[data-testid="stSidebar"] div.stButton > button:first-child:hover {{
+            background: #EAF2FF !important;
+            border-color: transparent !important;
+            color: #1E40AF !important;
+        }}
+
+        section[data-testid="stSidebar"] div.stButton > button[kind="primary"] {{
+            background: #EFF6FF !important;
+            border-color: #BFDBFE !important;
+            color: #2563EB !important;
+            box-shadow: none !important;
+            border-radius: 9px !important;
+            min-height: 2.38rem !important;
+            height: 2.38rem !important;
+        }}
+
+        section[data-testid="stSidebar"] div.stButton > button[kind="primary"] p {{
+            color: #2563EB !important;
+            font-weight: 560 !important;
+        }}
+
+        section[data-testid="stSidebar"] div.stButton > button:disabled {{
+            background: transparent !important;
+            border-color: transparent !important;
+            color: #94A3B8 !important;
+            opacity: 1 !important;
+            font-weight: 400 !important;
+        }}
+
+        section[data-testid="stSidebar"] div.stButton > button:disabled p {{
+            color: #94A3B8 !important;
+            font-weight: 400 !important;
+        }}
+
+        .register-client-button-marker {{
+            display: none;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.register-client-button-marker) div.stButton > button:first-child,
+        section[data-testid="stSidebar"] .st-key-register_new_client button {{
+            justify-content: center !important;
+            text-align: center !important;
+            padding-left: 0.82rem !important;
+            padding-right: 0.82rem !important;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(.register-client-button-marker) div.stButton > button:first-child p,
+        section[data-testid="stSidebar"] .st-key-register_new_client button p,
+        section[data-testid="stSidebar"] .st-key-register_new_client div[data-testid="stMarkdownContainer"] {{
+            width: 100% !important;
+            text-align: center !important;
+            justify-content: center !important;
         }}
 
         div[data-testid="stMetric"] {{
             background-color: #FFFFFF;
             padding: 0.85rem 0.9rem;
-            border-radius: 1rem;
-            border: 1px solid {BORDER};
-            box-shadow: 0px 4px 16px rgba(15, 23, 42, 0.035);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            box-shadow: 0px 4px 16px rgba(15, 23, 42, 0.03);
         }}
+
+        div[data-testid="stMetricLabel"] {{
+            color: var(--subtext) !important;
+            font-weight: 500 !important;
+        }}
+
+        div[data-testid="stMetricValue"] {{
+            color: var(--text) !important;
+            font-weight: 680 !important;
+            letter-spacing: -0.045em !important;
+        }}
+
+        textarea:focus,
+        input:focus,
+        div[data-baseweb="select"]:focus-within {{
+            border-color: var(--primary) !important;
+            box-shadow: 0 0 0 1px var(--primary) !important;
+        }}
+
+        @media (max-width: 1100px) {{
+            .main .block-container {{
+                padding-left: 1.2rem;
+                padding-right: 1.2rem;
+            }}
+
+
+            .record-list-row {{
+                grid-template-columns: 1fr;
+                gap: 0.45rem;
+            }}
+
+            .ai-summary-grid {{
+                grid-template-columns: 1fr;
+            }}
+
+            .report-plan-grid,
+            .chart-placeholder-grid,
+            .report-preview-chart-grid {{
+                grid-template-columns: 1fr;
+            }}
+
+            .chat-bubble-wrap {{
+                max-width: 92%;
+            }}
+        }}
+
+        /* =========================================================
+           Factor category pill buttons
+        ========================================================= */
+        .factor-category-marker,
+        .factor-category-is-selected,
+        .factor-category-is-unselected {{
+            display: none;
+        }}
+
+        div[data-testid="stMarkdownContainer"]:has(.factor-category-marker),
+        div[data-testid="stMarkdownContainer"]:has(.factor-category-is-selected),
+        div[data-testid="stMarkdownContainer"]:has(.factor-category-is-unselected) {{
+            display: none !important;
+            height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-marker) {{
+            flex: 0 0 auto !important;
+            width: auto !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-marker) div.stButton {{
+            width: auto !important;
+            display: inline-flex !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child {{
+            width: auto !important;
+            min-width: 4.2rem !important;
+            min-height: 2.25rem !important;
+            height: 2.25rem !important;
+            border-radius: 9999px !important;
+            padding: 0 1.05rem !important;
+            font-size: 0.92rem !important;
+            font-weight: 520 !important;
+            line-height: 1 !important;
+            white-space: nowrap !important;
+            box-shadow: none !important;
+            justify-content: center !important;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child p,
+        div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child span {{
+            font-size: 0.92rem !important;
+            font-weight: 520 !important;
+            line-height: 1 !important;
+            margin: 0 !important;
+            white-space: nowrap !important;
+            width: auto !important;
+            text-align: center !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child {{
+            background: #60A5FA !important;
+            border-color: #60A5FA !important;
+            color: #FFFFFF !important;
+            box-shadow: 0 6px 14px rgba(96, 165, 250, 0.18) !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child p,
+        div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child span {{
+            color: #FFFFFF !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-is-unselected) div.stButton > button:first-child {{
+            background: #FFFFFF !important;
+            border-color: #E5E7EB !important;
+            color: #0F172A !important;
+        }}
+
+        div[data-testid="column"]:has(.factor-category-is-unselected) div.stButton > button:first-child:hover {{
+            background: #EFF6FF !important;
+            border-color: #93C5FD !important;
+            color: #2563EB !important;
+        }}
+
+        button[data-testid="stBaseButton-pills"],
+        button[data-testid="stBaseButton-pillsActive"] {{
+            border-radius: 9999px !important;
+            min-height: 2.35rem !important;
+            padding: 0 1.12rem !important;
+            font-size: 0.95rem !important;
+            font-weight: 520 !important;
+            box-shadow: none !important;
+        }}
+
+        button[data-testid="stBaseButton-pills"] {{
+            background: #FFFFFF !important;
+            border: 1px solid #E5E7EB !important;
+            color: #0F172A !important;
+        }}
+
+        button[data-testid="stBaseButton-pills"]:hover {{
+            background: #EFF6FF !important;
+            border-color: #93C5FD !important;
+            color: #2563EB !important;
+        }}
+
+        button[data-testid="stBaseButton-pillsActive"] {{
+            background: #3B82F6 !important;
+            border: 1px solid #3B82F6 !important;
+            color: #FFFFFF !important;
+            box-shadow: 0 6px 14px rgba(59, 130, 246, 0.22) !important;
+        }}
+
+        button[data-testid="stBaseButton-pillsActive"] p,
+        button[data-testid="stBaseButton-pillsActive"] span,
+        button[data-testid="stBaseButton-pillsActive"] div {{
+            color: #FFFFFF !important;
+        }}
+
+        div[data-testid="column"]:has(.dashboard-ai-button-marker) {{
+            display: flex !important;
+            justify-content: flex-end !important;
+        }}
+
+        div[data-testid="column"]:has(.dashboard-ai-button-marker) div.stButton > button:first-child {{
+            width: auto !important;
+            min-width: 7.1rem !important;
+            height: 2.55rem !important;
+            min-height: 2.55rem !important;
+            border-radius: 999px !important;
+            border: 1px solid #BFDBFE !important;
+            background: #FFFFFF !important;
+            color: #1E40AF !important;
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.045) !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 0.45rem !important;
+            padding: 0 0.9rem !important;
+            font-size: 0.84rem !important;
+            font-weight: 560 !important;
+            transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease !important;
+        }}
+
+        div[data-testid="column"]:has(.dashboard-ai-button-marker) div.stButton > button:first-child:hover {{
+            background: #EFF6FF !important;
+            border-color: #93C5FD !important;
+            transform: translateY(-1px);
+        }}
+
+        div[data-testid="column"]:has(.dashboard-ai-button-marker) div.stButton > button:first-child p {{
+            color: #1E40AF !important;
+            font-size: 0.84rem !important;
+            font-weight: 560 !important;
+            white-space: nowrap !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 0.42rem !important;
+        }}
+
+        div[data-testid="column"]:has(.dashboard-ai-button-marker) div.stButton > button:first-child img {{
+            height: 1.35rem !important;
+            width: 1.35rem !important;
+            object-fit: contain !important;
+            margin-right: 0.12rem !important;
+            vertical-align: middle !important;
+        }}
+
+        .dashboard-ai-button-marker {{
+            display: none;
+        }}
+
+        div[data-testid="stVerticalBlock"]:has(.dashboard-session-select-marker) div[data-baseweb="select"] > div {{
+            transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
+            cursor: pointer !important;
+        }}
+
+        div[data-testid="stVerticalBlock"]:has(.dashboard-session-select-marker) div[data-baseweb="select"] > div:hover {{
+            background-color: #EFF6FF !important;
+            border-color: #BFDBFE !important;
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.08) !important;
+            cursor: pointer !important;
+        }}
+
+        div[data-testid="stVerticalBlock"]:has(.dashboard-session-select-marker) div[data-baseweb="select"] * {{
+            cursor: pointer !important;
+        }}
+
+        .dashboard-session-select-marker {{
+            display: none;
+        }}
+
+        div[data-testid="column"]:has(.session-detail-list-button-marker),
+        div[data-testid="column"]:has(.session-detail-dashboard-button-marker),
+        div[data-testid="column"]:has(.session-detail-chat-button-marker) {{
+            display: flex !important;
+            justify-content: flex-end !important;
+        }}
+
+        div[data-testid="column"]:has(.session-detail-list-button-marker) div.stButton > button:first-child,
+        div[data-testid="column"]:has(.session-detail-dashboard-button-marker) div.stButton > button:first-child {{
+            height: 2.35rem !important;
+            min-height: 2.35rem !important;
+            border-radius: 11px !important;
+            font-size: 0.84rem !important;
+            font-weight: 520 !important;
+            box-shadow: none !important;
+            padding: 0 0.85rem !important;
+        }}
+
+        div[data-testid="column"]:has(.session-detail-chat-button-marker) div.stButton > button:first-child {{
+            width: 2.35rem !important;
+            min-width: 2.35rem !important;
+            height: 2.35rem !important;
+            min-height: 2.35rem !important;
+            border-radius: 12px !important;
+            border: 1px solid #C7D7EA !important;
+            background: #F8FBFF !important;
+            color: #2563EB !important;
+            padding: 0 !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: none !important;
+            transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease !important;
+        }}
+
+        div[data-testid="column"]:has(.session-detail-chat-button-marker) div.stButton > button:first-child:hover {{
+            background: #EAF3FF !important;
+            border-color: #9FC4F4 !important;
+            color: #1D4ED8 !important;
+            transform: translateY(-1px) !important;
+        }}
+
+        div[data-testid="column"]:has(.session-detail-chat-button-marker) div.stButton > button:first-child p {{
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            line-height: 1 !important;
+            width: 100% !important;
+            text-align: center !important;
+            color: inherit !important;
+        }}
+
+        div[data-testid="column"]:has(.session-detail-chat-button-marker) div.stButton > button:first-child img {{
+            width: 1.32rem !important;
+            height: 1.32rem !important;
+            object-fit: contain !important;
+            display: block !important;
+        }}
+
+        .session-detail-list-button-marker,
+        .session-detail-dashboard-button-marker,
+        .session-detail-chat-button-marker {{
+            display: none;
+        }}
+
+        /* 챗봇 페이지는 전체 화면 스크롤을 막고, 메시지 영역만 스크롤 */
+        .chatbot-page-marker {{
+            display: none;
+        }}
+
+        .main .block-container:has(.chatbot-page-marker) {{
+            height: 100vh !important;
+            overflow: hidden !important;
+            padding-bottom: 0 !important;
+        }}
+
+        .main .block-container:has(.chatbot-page-marker) .chat-page-card {{
+            height: calc(100vh - 18.8rem) !important;
+            min-height: 320px !important;
+            overflow-y: auto !important;
+            padding-bottom: 1rem !important;
+            margin-bottom: 0.45rem !important;
+            box-sizing: border-box !important;
+        }}
+
+        /* 챗봇 하단 composer 내부 세로 여백 강제 축소 */
+        .st-key-chat_composer_bar div[data-testid="stVerticalBlock"] {{
+            gap: 0.25rem !important;
+        }}
+
+        .st-key-chat_composer_bar div[data-testid="stHorizontalBlock"] {{
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+        }}
+
+        .st-key-chat_composer_bar div[data-testid="element-container"],
+        .st-key-chat_composer_bar div[data-testid="stElementContainer"] {{
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+        }}
+
+        .st-key-chat_composer_bar div.stButton {{
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+        }}
+
+        .st-key-chat_composer_bar div[data-baseweb="input"] {{
+            margin-top: 0 !important;
+        }}
+
+        /* 공통 챗봇 이동 버튼 */
+        .chatbot-nav-button-marker {{
+            display: none;
+        }}
+
+        div[data-testid="column"]:has(.chatbot-nav-button-marker) {{
+            display: flex !important;
+            justify-content: flex-end !important;
+        }}
+
+        div[data-testid="column"]:has(.chatbot-nav-button-marker) div.stButton > button:first-child,
+        .st-key-session_detail_chatbot_button button,
+        .st-key-dashboard_chatbot_fab button {{
+            width: 2.65rem !important;
+            min-width: 2.65rem !important;
+            max-width: 2.65rem !important;
+            height: 2.65rem !important;
+            min-height: 2.65rem !important;
+            max-height: 2.65rem !important;
+            border-radius: 12px !important;
+            border: 1px solid #2563EB !important;
+            background: #2563EB !important;
+            color: #FFFFFF !important;
+            padding: 0 !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 0 10px 22px rgba(37, 99, 235, 0.20) !important;
+            transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease !important;
+        }}
+
+        div[data-testid="column"]:has(.chatbot-nav-button-marker) div.stButton > button:first-child:hover,
+        .st-key-session_detail_chatbot_button button:hover,
+        .st-key-dashboard_chatbot_fab button:hover {{
+            background: #1D4ED8 !important;
+            border-color: #1D4ED8 !important;
+            color: #FFFFFF !important;
+            transform: translateY(-1px) !important;
+        }}
+
+        div[data-testid="column"]:has(.chatbot-nav-button-marker) div.stButton > button:first-child p,
+        .st-key-session_detail_chatbot_button button p,
+        .st-key-dashboard_chatbot_fab button p {{
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 100% !important;
+            height: 100% !important;
+            color: #FFFFFF !important;
+            line-height: 1 !important;
+            margin: 0 !important;
+        }}
+
+        div[data-testid="column"]:has(.chatbot-nav-button-marker) div.stButton > button:first-child img,
+        .st-key-session_detail_chatbot_button button img,
+        .st-key-dashboard_chatbot_fab button img {{
+            width: 1.35rem !important;
+            height: 1.35rem !important;
+            object-fit: contain !important;
+            display: block !important;
+            filter: brightness(0) invert(1) !important;
+        }}      
+
+        /* =========================================================
+           내담자 홈 리디자인: 알약 탭 + 상담 요약 카드
+        ========================================================= */
+        .patient-home-tab-marker,
+        .patient-home-tab-active,
+        .patient-home-tab-inactive {{
+            display: none;
+        }}
+
+        .patient-home-tab-shell {{
+            width: 36rem;
+            max-width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 13px;
+            padding: 0.18rem;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.025);
+            margin: 0.95rem 0 1.45rem;
+        }}
+
+        div[data-testid="column"]:has(.patient-home-tab-marker) div.stButton > button:first-child {{
+            height: 2.35rem !important;
+            min-height: 2.35rem !important;
+            border-radius: 10px !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            font-size: 0.86rem !important;
+            font-weight: 560 !important;
+        }}
+
+        div[data-testid="column"]:has(.patient-home-tab-active) div.stButton > button:first-child {{
+            background: #EFF6FF !important;
+            color: #1D4ED8 !important;
+        }}
+
+        div[data-testid="column"]:has(.patient-home-tab-active) div.stButton > button:first-child p {{
+            color: #1D4ED8 !important;
+            font-weight: 620 !important;
+        }}
+
+        div[data-testid="column"]:has(.patient-home-tab-inactive) div.stButton > button:first-child {{
+            background: transparent !important;
+            color: #0F172A !important;
+        }}
+
+        div[data-testid="column"]:has(.patient-home-tab-inactive) div.stButton > button:first-child:hover {{
+            background: #F8FAFC !important;
+            color: #1D4ED8 !important;
+        }}
+
+        .home-summary-title {{
+            color: #0F172A;
+            font-size: 1rem;
+            font-weight: 640;
+            letter-spacing: -0.035em;
+            margin: 0.3rem 0 0.8rem;
+        }}
+
+        .home-summary-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.95rem;
+            margin-bottom: 1.05rem;
+        }}
+
+        .home-summary-card {{
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 16px;
+            padding: 1.05rem 1rem;
+            min-height: 8rem;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.035);
+        }}
+
+        .home-summary-head {{
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.58rem;
+        }}
+
+        .home-summary-icon {{
+            width: 2.35rem;
+            height: 2.35rem;
+            border-radius: 12px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.05rem;
+            font-weight: 720;
+            flex-shrink: 0;
+        }}
+
+        .home-summary-icon.blue {{
+            background: #EFF6FF;
+            color: #2563EB;
+        }}
+
+        .home-summary-icon.sky {{
+            background: #F0F7FF;
+            color: #1D4ED8;
+        }}
+
+        .home-summary-icon.orange {{
+            background: #FFF7ED;
+            color: #F97316;
+        }}
+
+        .home-summary-icon.red {{
+            background: #FEF2F2;
+            color: #EF4444;
+        }}
+
+        .home-summary-label {{
+            color: #64748B;
+            font-size: 0.78rem;
+            font-weight: 560;
+            line-height: 1.35;
+        }}
+
+        .home-summary-value {{
+            color: #0F172A;
+            font-size: 1.5rem;
+            font-weight: 680;
+            letter-spacing: -0.055em;
+            line-height: 1.15;
+            margin-left: 3.1rem;
+        }}
+
+        .home-summary-value.warning {{
+            color: #0F172A;
+            font-size: 1.2rem;
+            font-weight: 680;
+        }}
+
+        .home-summary-alert-text {{
+            color: #EF4444;
+            font-size: 0.78rem;
+            line-height: 1.45;
+            margin-top: 0.52rem;
+            font-weight: 540;
+        }}
+
+        .home-recent-summary-card {{
+            display: flex;
+            align-items: center;
+            gap: 0.95rem;
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 16px;
+            padding: 0.95rem 1.05rem;
+            min-height: 4.5rem;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.032);
+        }}
+
+        .home-recent-summary-icon {{
+            width: 2.45rem;
+            height: 2.45rem;
+            border-radius: 12px;
+            background: #EFF6FF;
+            color: #2563EB;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.05rem;
+            font-weight: 720;
+            flex-shrink: 0;
+        }}
+
+        .home-recent-summary-label {{
+            color: #64748B;
+            font-size: 0.78rem;
+            font-weight: 560;
+            margin-bottom: 0.22rem;
+        }}
+
+        .home-recent-summary-text {{
+            color: #0F172A;
+            font-size: 0.88rem;
+            font-weight: 520;
+            line-height: 1.45;
+        }}
+
+        @media (max-width: 1100px) {{
+            .home-summary-grid {{
+                grid-template-columns: 1fr 1fr;
+            }}
+
+            .patient-home-tab-shell {{
+                width: 100%;
+            }}
+        }} 
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -1393,22 +3393,14 @@ def apply_global_style():
 # =========================================================
 def render_sidebar():
     with st.sidebar:
-        st.markdown('<div class="sidebar-brand">CounsHelper</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="sidebar-subtitle">상담 기록 분석 & 보고서 자동화</div>',
-            unsafe_allow_html=True,
-        )
-
         st.markdown(
             """
-            <div class="sidebar-profile-card">
-                <div class="sidebar-avatar">보</div>
-                <div>
-                    <div class="sidebar-profile-name">보아즈</div>
-                    <div class="sidebar-profile-email">boaz@counshelper.ai</div>
-                </div>
+            <div class="sidebar-brand">CounsHelper</div>
+            <div class="sidebar-subtitle">상담 기록 분석 v0.9</div>
+            <div class="sidebar-profile-text">
+                <div style="color:#64748B; font-size:0.82rem; margin-bottom:0.2rem;">MVP Demo</div>
+                <strong>상담심리사 (데모)</strong>
             </div>
-            <div class="sidebar-plan-pill">구독 상태 · MVP Demo 플랜</div>
             """,
             unsafe_allow_html=True,
         )
@@ -1416,12 +3408,38 @@ def render_sidebar():
         st.divider()
 
         st.markdown('<div class="sidebar-section-title">내담자 선택</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sidebar-label">내담자 검색</div>', unsafe_allow_html=True)
 
-        client_options = CLIENTS["내담자 ID"].tolist()
+        search_query = st.text_input(
+            "내담자 검색",
+            value=st.session_state.get("client_search", ""),
+            placeholder="alias / 성별 / 지역 / 메모",
+            label_visibility="collapsed",
+            key="client_search_input",
+        )
+        st.session_state.client_search = search_query
+
+        filtered_clients = CLIENTS.copy()
+
+        if search_query.strip() and not filtered_clients.empty:
+            query = search_query.strip().lower()
+
+            def matches_client(row: pd.Series) -> bool:
+                values = [
+                    row.get("이름", ""),
+                    row.get("내담자 ID", ""),
+                    row.get("성별", ""),
+                    row.get("지역", ""),
+                    row.get("상담 유형", ""),
+                    row.get("메모", ""),
+                ]
+                return any(query in str(value).lower() for value in values)
+
+            filtered_clients = filtered_clients[filtered_clients.apply(matches_client, axis=1)]
+
+        client_options = filtered_clients["내담자 ID"].tolist() if not filtered_clients.empty else []
 
         if not client_options:
-            st.warning("표시할 내담자 데이터가 없습니다.")
+            st.warning("검색 결과가 없습니다.")
             selected_client_id = st.session_state.selected_client
         else:
             if st.session_state.selected_client in client_options:
@@ -1432,6 +3450,7 @@ def render_sidebar():
             selected_client_id = st.selectbox(
                 "내담자",
                 options=client_options,
+                format_func=lambda client_id: _format_sidebar_client_label(client_id),
                 index=default_index,
                 label_visibility="collapsed",
             )
@@ -1455,14 +3474,51 @@ def render_sidebar():
             st.session_state.analysis_result = None
             st.rerun()
 
+        with st.expander("신규 등록", expanded=False):
+            new_client_name = st.text_input("이름/alias", placeholder="예: C-005", key="new_client_name")
+            new_client_gender = st.selectbox("성별", ["여성", "남성", "기타/미상"], key="new_client_gender")
+            new_client_age = st.text_input("연령대 또는 연령", placeholder="예: 30대 또는 32", key="new_client_age")
+            new_client_region = st.text_input("지역", placeholder="예: 서울", key="new_client_region")
+
+            st.markdown('<span class="register-client-button-marker"></span>', unsafe_allow_html=True)
+            if st.button("등록", type="primary", use_container_width=True, key="register_new_client"):
+                did_register = register_new_client(
+                    name=new_client_name,
+                    gender=new_client_gender,
+                    age=new_client_age,
+                    region=new_client_region,
+                    memo="",
+                )
+
+                if did_register:
+                    st.rerun()
+
         st.divider()
 
-        st.markdown('<div class="sidebar-spacer"></div>', unsafe_allow_html=True)
+        nav_items = [
+            ("내담자 홈", "내담자 홈", "side_nav_home"),
+            ("상담내역 기록·추가", "상담내역 기록·추가", "side_nav_records"),
+            ("분석 대시보드", "분석 대시보드", "side_nav_dashboard"),
+            ("AI 보고서", "AI 보고서", "side_nav_report"),
+            ("챗봇", "챗봇", "side_nav_chatbot"),
+        ]
 
-        if st.button("⚙️  설정", use_container_width=True):
-            st.toast(
-                f"보고서 {MODEL_BACKEND} · 분류 {CLASSIFIER_BACKEND} · 28요인 {FACTOR_BACKEND}"
-            )
+        for label, page_name, key in nav_items:
+            active = st.session_state.page == page_name
+
+            if st.button(
+                label,
+                key=key,
+                use_container_width=True,
+                type="primary" if active else "secondary",
+            ):
+                go_page(page_name)
+                st.rerun()
+
+        st.markdown("<div style='height: 2.4rem;'></div>", unsafe_allow_html=True)
+        st.divider()
+
+        st.button("설정", key="side_nav_settings", use_container_width=True, disabled=True)
 
 
 # =========================================================
@@ -1514,14 +3570,555 @@ def render_main_nav():
 
 
 # =========================================================
-# 12. 상담내역 기록·추가 화면
+# 12. 내담자 홈 / 회기 상세
 # =========================================================
-def render_session_cards():
-    st.markdown('<div class="section-title">상담 내역</div>', unsafe_allow_html=True)
+def _session_order(value: Any) -> int:
+    match = re.search(r"(\d+)", str(value or ""))
+    return int(match.group(1)) if match else 999
+
+
+def get_client_sessions_sorted() -> pd.DataFrame:
+    client_sessions = SESSIONS[SESSIONS["내담자 ID"] == st.session_state.selected_client].copy()
+
+    if client_sessions.empty:
+        return client_sessions
+
+    client_sessions["_session_order"] = client_sessions["회기"].apply(_session_order)
+    return client_sessions.sort_values("_session_order", ascending=True).drop(columns=["_session_order"])
+
+
+def analyze_current_session_if_needed():
+    if st.session_state.analysis_result is not None:
+        return
+
+    script = build_dialogue_text(st.session_state.dialogue_rows)
+
+    if not script.strip():
+        return
+
+    with st.spinner("선택 회기 분석 결과를 준비하는 중입니다..."):
+        st.session_state.analysis_result = run_analysis(script)
+
+
+def risk_status(score: float) -> str:
+    if score >= 2:
+        return "주의"
+    if score >= 1:
+        return "관찰"
+    return "낮음"
+
+
+def style_dashboard_chart(fig):
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#334155", size=12),
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="left",
+            x=1.02,
+            title=None,
+        ),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#E2E8F0", zeroline=False)
+    fig.update_yaxes(showgrid=False, zeroline=False)
+    return fig
+
+
+def build_hira_comparison_dataframe(review_score: int) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "그룹": ["현재 내담자", "동일 연령 평균", "전체 평균"],
+            "비율": [review_score, 38, 31],
+        }
+    )
+
+
+def build_trend_dataframe(
+    client_sessions: pd.DataFrame,
+    selected_session: str,
+    depression_score: float,
+    anxiety_score: float,
+    factors: Dict[str, int],
+) -> pd.DataFrame:
+    rows = []
+
+    for _, row in client_sessions.iterrows():
+        session_name = str(row.get("회기", ""))
+        order = _session_order(session_name)
+
+        if session_name == selected_session:
+            rows.append(
+                {
+                    "회기": session_name,
+                    "우울": depression_score,
+                    "불안": anxiety_score,
+                    "수면문제": factors.get("sleep_disturbance", 0),
+                    "피로감": factors.get("fatigue", 0),
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "회기": session_name,
+                    "우울": min(3, 1 + order * 0.35),
+                    "불안": min(3, 0.8 + order * 0.32),
+                    "수면문제": min(3, 1 + order * 0.28),
+                    "피로감": min(3, 0.7 + order * 0.36),
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def factor_category_filter(factor_df: pd.DataFrame, selected_categories: List[str]) -> pd.DataFrame:
+    if not selected_categories:
+        return factor_df.iloc[0:0]
+
+    category_map = {
+        "우울": ["우울"],
+        "불안": ["불안"],
+        "중독": ["중독"],
+    }
+    allowed_categories = []
+
+    for category in selected_categories:
+        allowed_categories.extend(category_map.get(category, [category]))
+
+    return factor_df[factor_df["카테고리"].isin(allowed_categories)]
+
+
+def get_session_classification_label(session_row: pd.Series) -> str:
+    explicit_value = str(session_row.get("분류 유형", "") or "").strip()
+
+    if explicit_value and explicit_value.lower() != "nan":
+        return explicit_value
+
+    class_value = str(session_row.get("class", "") or "").strip()
+
+    if class_value and class_value.lower() != "nan":
+        return class_value
+
+    score_labels = [
+        ("depression", "우울"),
+        ("anxiety", "불안"),
+        ("addiction", "중독"),
+    ]
+    active_labels = []
+
+    for column, label in score_labels:
+        try:
+            if int(float(session_row.get(column, 0) or 0)) > 0:
+                active_labels.append(label)
+        except (TypeError, ValueError):
+            continue
+
+    return "/".join(active_labels) if active_labels else "미분류"
+
+
+def get_session_status_class(status_text: str) -> str:
+    text = str(status_text or "")
+
+    if any(keyword in text for keyword in ["검토", "주의", "확인", "중"]):
+        return "session-card-status-review"
+
+    if any(keyword in text for keyword in ["완료", "작성 완료", "전처리 완료", "분석 완료"]):
+        return "session-card-status-complete"
+
+    return "session-card-status-draft"
+
+def render_session_list_card(row: pd.Series, key_prefix: str):
+    session_name = str(row.get("회기", "회기"))
+    session_date = str(row.get("상담일", "날짜 미상"))
+    counseling_title = str(row.get("상담 주제", "상담 주제 미입력"))
+    counseling_type_display = get_session_classification_label(row)
+
+    status_text = str(row.get("보고서 상태", "상태 미상"))
+    status_class = get_session_status_class(status_text)
+
+    with st.container(border=True):
+        num_col, info_col, status_col, open_col = st.columns(
+            [0.13, 0.59, 0.14, 0.14],
+            vertical_alignment="center",
+        )
+
+        with num_col:
+            st.markdown(
+                f"""
+                <div class="record-session-number-box">
+                    {html_escape(session_name)}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with info_col:
+            st.markdown(
+                f"""
+                <div>
+                    <div class="record-session-title">{html_escape(counseling_title)}</div>
+                    <div class="record-session-meta">
+                        {html_escape(session_date)} · 분류 유형: {html_escape(counseling_type_display)}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with status_col:
+            st.markdown(
+                f"""
+                <div class="record-session-status-wrap">
+                    <span class="session-card-status-badge {status_class}">
+                        {html_escape(status_text)}
+                    </span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with open_col:
+            st.markdown('<span class="record-open-button-marker"></span>', unsafe_allow_html=True)
+
+            if st.button(
+                "열기",
+                key=f"{key_prefix}_open_{row['내담자 ID']}_{row['회기']}",
+                use_container_width=True,
+            ):
+                open_session_detail(row["회기"])
+                st.rerun()
+
+
+def _get_client_risk_signal(client_sessions: pd.DataFrame) -> Tuple[str, str]:
+    risk_sessions = []
+
+    for _, row in client_sessions.iterrows():
+        session_name = row.get("회기", "")
+        dialogue = SESSION_DIALOGUES.get((st.session_state.selected_client, session_name))
+
+        if dialogue is None:
+            continue
+
+        script = build_dialogue_text(dialogue)
+
+        if any(keyword in script for keyword in ["자살", "죽고 싶", "죽고싶", "사라지고"]):
+            risk_sessions.append(str(session_name))
+
+    if risk_sessions:
+        return "risk-alert", f"자살/자해 관련 신호 확인 필요 · {', '.join(risk_sessions)}"
+
+    return "risk-ok", "자살/자해 관련 신호 없음"
+
+
+def render_patient_home():
+    client_row = get_client_row()
+    client_sessions = get_client_sessions_sorted()
+
+    name = get_client_display_name(client_row)
+    client_id = str(client_row.get("내담자 ID", st.session_state.selected_client))
+    gender = str(client_row.get("성별", "미상"))
+    age = str(client_row.get("연령대", "미상"))
+    region = str(client_row.get("지역", "미상"))
+    counseling_type = str(client_row.get("상담 유형", "미상"))
+    recent_session = str(client_row.get("최근 회기", st.session_state.selected_session))
+    avatar = (name or client_id or "C")[0]
+
+    latest_date = client_sessions.iloc[-1]["상담일"] if not client_sessions.empty else "기록 없음"
+    registered_date = client_sessions.iloc[0]["상담일"] if not client_sessions.empty else str(client_row.get("등록일", "등록일 미상"))
+
+    analyzed_count = (
+        int(client_sessions["보고서 상태"].astype(str).str.contains("작성 완료|전처리 완료|분석 완료", regex=True).sum())
+        if not client_sessions.empty
+        else 0
+    )
+    attention_count = (
+        int(client_sessions["보고서 상태"].astype(str).str.contains("검토|주의|확인", regex=True).sum())
+        if not client_sessions.empty
+        else 0
+    )
+
+    risk_class, risk_text = _get_client_risk_signal(client_sessions)
+
+    st.markdown('<div class="patient-kicker">‹ 내담자 관리</div>', unsafe_allow_html=True)
+    st.markdown('<div class="patient-title">내담자 홈</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-desc">선택한 내담자의 기존 상담 기록을 확인하거나 새 상담 내역을 추가합니다.</div>',
+        '<div class="patient-desc">최근 상담 흐름과 AI 분석 결과를 확인하고 다음 회기를 준비할 수 있습니다.</div>',
         unsafe_allow_html=True,
     )
+
+    st.markdown(
+        f"""
+        <div class="profile-card">
+            <div class="profile-avatar">{html_escape(avatar)}</div>
+            <div>
+                <div class="profile-summary">{html_escape(name)}</div>
+                <div class="profile-meta">
+                    등록일: {html_escape(str(registered_date))} · 성별: {html_escape(gender)} · 연령: {html_escape(age)} · 지역: {html_escape(region)}
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 내담자 홈 탭: st.pills 기반 알약형 탭
+    st.markdown('<span class="patient-home-pills-marker"></span>', unsafe_allow_html=True)
+
+    active_tab = st.pills(
+        "내담자 홈 탭",
+        options=["내담자 정보", "상담관리"],
+        selection_mode="single",
+        default=st.session_state.get("patient_home_tab", "내담자 정보"),
+        key="patient_home_tab_pills",
+        label_visibility="collapsed",
+        width="content",
+    )
+
+    if active_tab is None:
+        active_tab = st.session_state.get("patient_home_tab", "내담자 정보")
+
+    if active_tab != st.session_state.get("patient_home_tab"):
+        st.session_state.patient_home_tab = active_tab
+        st.rerun()
+
+    st.session_state.patient_home_tab = active_tab
+
+    if active_tab == "내담자 정보":
+        risk_value = "확인 필요" if risk_class == "risk-alert" else "없음"
+
+        st.markdown('<div class="home-summary-title">상담 요약</div>', unsafe_allow_html=True)
+
+        st.markdown(
+            f"""<div class="home-summary-grid">
+<div class="home-summary-card">
+    <div class="home-summary-head">
+        <div class="home-summary-icon blue">↻</div>
+        <div class="home-summary-label">총 회기</div>
+    </div>
+    <div class="home-summary-value">{len(client_sessions)}회</div>
+</div>
+<div class="home-summary-card">
+    <div class="home-summary-head">
+        <div class="home-summary-icon sky">✓</div>
+        <div class="home-summary-label">분석 완료</div>
+    </div>
+    <div class="home-summary-value">{analyzed_count}회</div>
+</div>
+<div class="home-summary-card">
+    <div class="home-summary-head">
+        <div class="home-summary-icon orange">!</div>
+        <div class="home-summary-label">주의 회기</div>
+    </div>
+    <div class="home-summary-value">{attention_count}회</div>
+</div>
+<div class="home-summary-card">
+    <div class="home-summary-head">
+        <div class="home-summary-icon red">◇</div>
+        <div class="home-summary-label">위험 신호</div>
+    </div>
+    <div class="home-summary-value warning">{html_escape(risk_value)}</div>
+    <div class="home-summary-alert-text">{html_escape(risk_text)}</div>
+</div>
+</div>""",
+            unsafe_allow_html=True,
+        )
+
+        recent_summary_text = (
+            f"{recent_session} · {latest_date} · {counseling_type}"
+            if not client_sessions.empty
+            else "아직 등록된 상담 회기가 없습니다."
+        )
+
+        st.markdown(
+            f"""<div class="home-recent-summary-card">
+<div class="home-recent-summary-icon">▤</div>
+<div>
+    <div class="home-recent-summary-label">최근 회기 요약</div>
+    <div class="home-recent-summary-text">{html_escape(str(recent_summary_text))}</div>
+</div>
+</div>""",
+            unsafe_allow_html=True,
+        )
+
+    else:
+        st.markdown('<div class="home-summary-title">상담 회기 목록</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="page-desc" style="margin-bottom:0.5rem;">회기별 기록과 분석 상태를 확인할 수 있습니다.</div>',
+            unsafe_allow_html=True,
+        )
+
+        if client_sessions.empty:
+            st.info("등록된 상담 내역이 없습니다. 상담내역 기록·추가에서 새 상담을 입력해 주세요.")
+        else:
+            for _, row in client_sessions.iterrows():
+                render_session_list_card(row, key_prefix="home")
+                st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
+
+            st.markdown(
+                """
+                <div style="color:#64748B; font-size:0.82rem; margin-top:0.2rem;">
+                    회기를 클릭하면 상세 내용을 확인할 수 있습니다.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+def _build_session_summary_text(session_row: pd.Series, script: str) -> str:
+    existing_summary = str(session_row.get("summary", "") or "").strip()
+
+    if existing_summary and existing_summary.lower() != "nan":
+        return existing_summary
+
+    if st.session_state.analysis_result is not None:
+        return build_report_text(st.session_state.analysis_result)
+
+    preview_lines = []
+
+    for line in script.split("\n"):
+        if line.strip():
+            preview_lines.append(line.strip())
+        if len(preview_lines) >= 4:
+            break
+
+    preview = "\n".join(preview_lines) if preview_lines else "상담 스크립트가 아직 입력되지 않았습니다."
+
+    return (
+        f"상담일: {session_row.get('상담일', '미상')}\n"
+        f"상담 주제: {session_row.get('상담 주제', '미상')}\n"
+        f"보고서 상태: {session_row.get('보고서 상태', '미상')}\n\n"
+        f"{preview}"
+    )
+
+
+def _get_journal_id(client_id: str, session_name: str, session_row: pd.Series) -> str:
+    filename = str(session_row.get("filename", "") or "").strip()
+
+    if filename and filename.lower() != "nan":
+        return Path(filename).stem[:8]
+
+    seed = f"{client_id}:{session_name}"
+    return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:8]
+
+
+def render_session_detail():
+    client_row = get_client_row()
+    session_row = get_session_row()
+    script = build_dialogue_text(st.session_state.dialogue_rows)
+
+    client_id = str(client_row.get("내담자 ID", st.session_state.selected_client))
+    name = get_client_display_name(client_row)
+    session_name = str(session_row.get("회기", st.session_state.selected_session))
+    session_date = str(session_row.get("상담일", "미상"))
+    session_topic = str(session_row.get("상담 주제", "미상"))
+    report_status = str(session_row.get("보고서 상태", "미상"))
+    journal_id = _get_journal_id(client_id, session_name, session_row)
+    counseling_type = str(client_row.get("상담 유형", "상담"))
+
+    title_col, list_col, dashboard_col, chatbot_col = st.columns(
+        [0.58, 0.13, 0.17, 0.06],
+        vertical_alignment="center",
+    )
+
+    with title_col:
+        st.markdown('<div class="patient-title">상담일지 열람</div>', unsafe_allow_html=True)
+  
+
+    with list_col:
+        st.markdown('<span class="session-detail-list-button-marker"></span>', unsafe_allow_html=True)
+        if st.button("목록으로", use_container_width=True):
+            back_to_patient_home()
+            st.rerun()
+
+    with dashboard_col:
+        st.markdown('<span class="session-detail-dashboard-button-marker"></span>', unsafe_allow_html=True)
+        if st.button("분석 대시보드", use_container_width=True):
+            if st.session_state.analysis_result is None and script.strip():
+                with st.spinner("선택 회기 분석 대시보드를 준비하는 중입니다..."):
+                    st.session_state.analysis_result = run_analysis(script)
+            go_page("분석 대시보드")
+            st.rerun()
+
+    with chatbot_col:
+        st.markdown('<span class="chatbot-nav-button-marker"></span>', unsafe_allow_html=True)
+        chatbot_icon_label = f"![chatbot]({get_png_data_uri(CHATBOT_ICON_PATH)})"
+
+        if st.button(
+            chatbot_icon_label,
+            key="session_detail_chatbot_button",
+            use_container_width=True,
+            help="챗봇으로 이동",
+        ):
+            go_page("챗봇")
+            st.rerun()
+
+    st.markdown(
+        f"""
+        <div class="session-detail-header">
+            <div class="journal-grid">
+                <div><div class="journal-label">일지번호</div><div class="journal-value">{html_escape(journal_id)}</div></div>
+                <div><div class="journal-label">상담일자</div><div class="journal-value">{html_escape(session_date)}</div></div>
+                <div><div class="journal-label">회기</div><div class="journal-value">{html_escape(session_name)}</div></div>
+                <div><div class="journal-label">상태</div><div class="journal-value">{html_escape(report_status)}</div></div>
+                <div><div class="journal-label">상담제목</div><div class="journal-value">{html_escape(session_topic)}</div></div>
+                <div><div class="journal-label">상담분류</div><div class="journal-value">{html_escape(counseling_type)}</div></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    report_col, memo_col = st.columns([0.62, 0.38], gap="large")
+
+    with report_col:
+        st.markdown('<div class="session-detail-section-title">요약 보고서</div>', unsafe_allow_html=True)
+        summary_text = _build_session_summary_text(session_row, script)
+        st.markdown(
+            f"""
+            <div class="report-box">
+                <div class="report-box-title">{html_escape(session_name)} 요약</div>
+                <div class="report-box-body">{html_escape(summary_text)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with memo_col:
+        st.markdown('<div class="session-detail-section-title">상담사 메모</div>', unsafe_allow_html=True)
+        note_key = f"{client_id}_{session_name}"
+        current_note = st.session_state.session_notes.get(note_key, "")
+        note_value = st.text_area(
+            "메모",
+            value=current_note,
+            height=340,
+            placeholder="다음 회기에서 확인할 내용, 보호요인, 위험 신호, 상담사 관찰 메모를 적어두세요.",
+            label_visibility="collapsed",
+            key=f"session_note_input_{note_key}",
+        )
+        st.session_state.session_notes[note_key] = note_value
+        st.caption("현재 메모는 앱 세션 동안 임시 보관됩니다.")
+
+
+# =========================================================
+# 13. 상담내역 기록·추가 화면
+# =========================================================
+def render_session_cards():
+    header_col, add_col = st.columns([0.82, 0.18], vertical_alignment="center")
+
+    with header_col:
+        st.markdown('<div class="patient-title">상담내역</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="patient-desc">상담 회기별 기록과 분석 상태를 확인하고, 새 상담 내역을 추가할 수 있습니다.</div>',
+            unsafe_allow_html=True,
+        )
+
+    with add_col:
+        if st.button("+ 새 상담 추가", key="add_new_session_top", use_container_width=True, type="primary"):
+            start_new_session()
+            st.rerun()
+
+    st.markdown("<div style='height: 0.85rem;'></div>", unsafe_allow_html=True)
 
     client_sessions = SESSIONS[SESSIONS["내담자 ID"] == st.session_state.selected_client].copy()
 
@@ -1533,43 +4130,173 @@ def render_session_cards():
     client_sessions = client_sessions.sort_values("_session_order", ascending=True).drop(columns=["_session_order"])
 
     if client_sessions.empty:
-        st.info("기존 상담 내역이 없습니다. 새 상담 내역을 추가해 주세요.")
-    else:
-        for _, row in client_sessions.iterrows():
-            selected = (
-                st.session_state.record_mode == "existing"
-                and st.session_state.selected_session == row["회기"]
-            )
+        st.info("기존 상담 내역이 없습니다. 우측 상단의 새 상담 추가 버튼을 눌러 첫 상담 내역을 입력해 주세요.")
+        return
 
-            with st.container(border=True):
-                info_col, button_col = st.columns([0.78, 0.22], vertical_alignment="center")
+    for _, row in client_sessions.iterrows():
+        render_session_list_card(row, key_prefix="record")
+        st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
 
-                with info_col:
-                    st.markdown(f"**{row['회기']} · {row['상담 주제']}**")
-                    st.caption(f"{row['상담일']} · {row['보고서 상태']}")
+    st.markdown(
+        """
+        <div style="color:#64748B; font-size:0.82rem; text-align:center; margin-top:0.6rem;">
+            회기를 클릭하면 상세 내용을 확인할 수 있습니다.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-                with button_col:
-                    button_label = "선택됨" if selected else "기록 보기"
 
-                    if st.button(
-                        button_label,
-                        key=f"select_{row['내담자 ID']}_{row['회기']}",
-                        use_container_width=True,
-                        disabled=selected,
-                    ):
-                        select_session(row["회기"])
-                        st.rerun()
+def render_new_session_form():
+    client_row = get_client_row()
+    client_name = get_client_display_name(client_row)
+
+    if "new_session_name" not in st.session_state:
+        st.session_state.new_session_name = get_next_session_name()
+    if "new_session_date" not in st.session_state:
+        st.session_state.new_session_date = datetime.now().date()
+    if "new_session_scope" not in st.session_state:
+        st.session_state.new_session_scope = "복합"
+    if "new_session_topic" not in st.session_state:
+        st.session_state.new_session_topic = ""
+    if "new_session_input_mode" not in st.session_state:
+        st.session_state.new_session_input_mode = "발화 단위 입력"
+
+    title_col, list_col = st.columns([0.82, 0.18], vertical_alignment="center")
+
+    with title_col:
+        st.markdown('<div class="patient-title">새 상담 내역 추가</div>', unsafe_allow_html=True)
+        
+
+    with list_col:
+        if st.button("목록으로", use_container_width=True):
+            cancel_new_session()
+            st.rerun()
+
+    f1, f2, f3, f4 = st.columns(4)
 
     with st.container(border=True):
-        info_col, button_col = st.columns([0.78, 0.22], vertical_alignment="center")
+        st.markdown(
+            """
+            <div class="new-session-card-head">
+                <div class="new-session-card-icon">▣</div>
+                <div>
+                    <div class="new-session-card-title">상담 기본 정보</div>
+                    <div class="new-session-card-desc">분석에 사용할 회기 메타 정보를 입력합니다.</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        with info_col:
-            st.markdown("**+ 신규　새 상담 내역 추가**")
-            st.caption("회기 정보와 상담 내용을 입력해 새 기록을 생성합니다.")
+        f1, f2, f3, f4 = st.columns(4)
 
-        with button_col:
-            if st.button("추가하기", key="add_new_session", use_container_width=True):
-                start_new_session()
+        with f1:
+            st.text_input("회기 번호", key="new_session_name")
+
+        with f2:
+            st.date_input("회기 일시", key="new_session_date")
+
+        with f3:
+            st.selectbox(
+                "상담 범위",
+                options=["우울", "불안", "중독", "복합"],
+                key="new_session_scope",
+            )
+
+        with f4:
+            st.text_input(
+                "상담 주제",
+                placeholder="예: 직장 스트레스로 인한 불면",
+                key="new_session_topic",
+            )
+
+    with st.container(border=True):
+        st.markdown(
+            """
+            <div class="new-session-card-head">
+                <div class="new-session-card-icon">💬</div>
+                <div>
+                    <div class="new-session-card-title">상담 내용 입력</div>
+                    <div class="new-session-card-desc">상담사와 내담자의 발화를 입력하면 AI가 회기 내용을 분석합니다.</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown('<span class="new-session-mode-pills-marker"></span>', unsafe_allow_html=True)
+
+        input_mode = st.pills(
+            "입력 방식",
+            options=["발화 단위 입력", "전사 텍스트 붙여넣기"],
+            selection_mode="single",
+            default=st.session_state.get("new_session_input_mode", "발화 단위 입력"),
+            key="new_session_input_mode_pills",
+            label_visibility="collapsed",
+            width="content",
+        )
+
+        if input_mode is None:
+            input_mode = st.session_state.get("new_session_input_mode", "발화 단위 입력")
+
+        st.session_state.new_session_input_mode = input_mode
+
+        st.markdown("<div style='height: 0.65rem;'></div>", unsafe_allow_html=True)
+
+        if input_mode == "전사 텍스트 붙여넣기":
+            default_script = build_dialogue_text(st.session_state.dialogue_rows)
+            pasted_script = st.text_area(
+                "전사 텍스트",
+                value=default_script,
+                height=300,
+                placeholder="상담 전체 전사 텍스트를 붙여넣어 주세요.",
+                label_visibility="collapsed",
+                key="new_session_script_text",
+            )
+        else:
+            st.session_state.dialogue_rows = st.data_editor(
+                st.session_state.dialogue_rows,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config={
+                    "화자": st.column_config.SelectboxColumn(
+                        "화자",
+                        options=["상담사", "내담자"],
+                        required=True,
+                    ),
+                    "발화": st.column_config.TextColumn("발화", width="large"),
+                },
+                key="new_session_dialogue_editor",
+            )
+            pasted_script = build_dialogue_text(st.session_state.dialogue_rows)
+
+        reset_col, spacer_col = st.columns([0.14, 0.86])
+
+        with reset_col:
+            if st.button("입력 초기화", key="new_session_reset_dialogue", use_container_width=True):
+                st.session_state.dialogue_rows = get_empty_dialogue_rows()
+                st.session_state.pop("new_session_dialogue_editor", None)
+                st.session_state.pop("new_session_script_text", None)
+                st.rerun()
+
+    spacer, b_save, b_analyze = st.columns(
+        [0.62, 0.16, 0.22],
+        gap="small",
+    )
+
+    with b_save:
+        if st.button("임시저장", use_container_width=True):
+            save_new_session(pasted_script, run_ai=False)
+            st.success("임시 저장했습니다.")
+            st.rerun()
+
+    with b_analyze:
+        if st.button("AI 분석 실행", type="primary", use_container_width=True):
+            if not pasted_script.strip():
+                st.warning("상담 내용을 입력하세요.")
+            else:
+                save_new_session(pasted_script, run_ai=True)
                 st.rerun()
 
 
@@ -1626,251 +4353,695 @@ def render_record_editor():
 
 
 def render_record_page():
+    if st.session_state.get("record_mode") == "new":
+        render_new_session_form()
+        return
+
     render_session_cards()
-    st.markdown("<div style='height: 1.1rem;'></div>", unsafe_allow_html=True)
-    render_record_editor()
 
 
 # =========================================================
 # 13. 분석 대시보드
 # =========================================================
 def render_dashboard():
-    st.markdown('<div class="section-title">분석 대시보드</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="page-desc">AI 모델 출력 결과를 기반으로 상담 내용의 주요 라벨과 요인을 시각화합니다.</div>',
-        unsafe_allow_html=True,
+    client_row = get_client_row()
+    client_name = get_client_display_name(client_row)
+    client_sessions = get_client_sessions_sorted()
+
+    title_col, chat_col = st.columns([0.88, 0.12], vertical_alignment="center")
+
+    with title_col:
+        st.markdown('<div class="patient-title">분석 대시보드</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="patient-desc">상담 회기의 위험도, 주요 요인, 변화 추이를 한눈에 확인합니다.</div>',
+            unsafe_allow_html=True,
+        )
+
+    with chat_col:
+        st.markdown('<span class="chatbot-nav-button-marker"></span>', unsafe_allow_html=True)
+        chatbot_button_label = f"![chatbot]({get_png_data_uri(CHATBOT_ICON_PATH)})"
+
+        if st.button(
+            chatbot_button_label,
+            key="dashboard_chatbot_fab",
+            use_container_width=True,
+            help="챗봇으로 이동",
+        ):
+            go_page("챗봇")
+            st.rerun()
+
+    if client_sessions.empty:
+        st.info("분석할 상담 회기가 없습니다. 먼저 상담내역 기록·추가에서 회기를 추가해 주세요.")
+        return
+
+    session_options = client_sessions["회기"].tolist()
+
+    if st.session_state.selected_session not in session_options:
+        select_session(session_options[0])
+
+    st.markdown('<span class="dashboard-session-select-marker"></span>', unsafe_allow_html=True)
+    selected_label = st.selectbox(
+        "회기 선택",
+        options=session_options,
+        index=session_options.index(st.session_state.selected_session),
+        format_func=lambda session_name: (
+            f"{session_name} · "
+            f"{client_sessions[client_sessions['회기'] == session_name].iloc[0].get('상담일', '날짜 미상')}"
+        ),
     )
-    
+
+    if selected_label != st.session_state.selected_session:
+        select_session(selected_label)
+        analyze_current_session_if_needed()
+        st.rerun()
+
+    analyze_current_session_if_needed()
     result = st.session_state.analysis_result
 
     if result is None:
-        st.info("아직 분석 결과가 없습니다. 먼저 상담내역 기록·추가 화면에서 AI 분석을 실행하세요.")
+        st.info("선택한 회기의 상담 내용이 없어 분석 결과를 만들 수 없습니다.")
         return
 
-    backend = result.get("model_info", {}).get("backend", "unknown")
-
-    if backend == "mock":
-        st.warning("현재 결과는 mock 분석 결과입니다. 실제 KlueBERT, KoAlpaca, RAG 모델 결과가 아닙니다.")
-    elif backend == "koalpaca_api":
-        st.info("현재 보고서 생성 백엔드는 KoAlpaca API로 설정되어 있습니다.")
-    else:
-        st.info(f"현재 모델 백엔드: {backend}")
-
-    classifier_backend = result.get("model_info", {}).get("classifier_backend", "mock")
-    classifier_status = result.get("model_info", {}).get("classifier_status", "")
-    classifier_message = result.get("model_info", {}).get("classifier_message", "")
-    classifier_scores = result.get("model_info", {}).get("classifier_scores", {})
-    classifier_raw_scores = result.get("model_info", {}).get("classifier_raw_scores", {})
-    
-    if classifier_backend == "mock":
-        st.warning("현재 우울/불안/중독 판별은 mock 분류 결과입니다. 실제 KlueBERT 모델 결과가 아닙니다.")
-    elif classifier_backend == "kluebert_api":
-        if classifier_status == "success":
-            st.success("우울/불안/중독 판별 백엔드: KlueBERT API 연결 성공")
-            if classifier_scores:
-                st.caption(f"KlueBERT 0~3 예측 점수: {classifier_scores}")
-            if classifier_raw_scores:
-                st.caption(f"KlueBERT 회귀 원점수(raw score): {classifier_raw_scores}")
-        else:
-            st.info(f"우울/불안/중독 판별 백엔드: KlueBERT API / 상태: {classifier_status}")
-            if classifier_message:
-                st.caption(classifier_message)
-
-    if backend == "mock":
-        st.warning("현재 보고서 생성 백엔드는 mock입니다. KoAlpaca API 보고서 결과가 아닙니다.")
-    elif backend == "koalpaca_api":
-        st.info("현재 보고서 생성 백엔드는 KoAlpaca API로 설정되어 있습니다.")
-    else:
-        st.info(f"현재 모델 백엔드: {backend}")
-
-    factor_backend = result.get("model_info", {}).get("factor_backend", "mock")
-    factor_status = result.get("model_info", {}).get("factor_status", "")
-    factor_message = result.get("model_info", {}).get("factor_message", "")
-
-    if factor_backend == "mock":
-        st.warning("현재 28요인 점수는 mock 추출 결과입니다. 실제 Gemini API 결과가 아닙니다.")
-    elif factor_backend == "gemini_api":
-        if factor_status == "success":
-            st.success("28요인 추출 백엔드: Gemini API 연결 성공")
-        else:
-            st.info(f"28요인 추출 백엔드: Gemini API / 상태: {factor_status}")
-            if factor_message:
-                st.caption(factor_message)
-                
-    selected_client_id = st.session_state.selected_client
-    selected_session = st.session_state.selected_session
-
-    current_session_rows = SESSIONS[
-        (SESSIONS["내담자 ID"] == selected_client_id)
-        & (SESSIONS["회기"] == selected_session)
-    ]
-
-    if not current_session_rows.empty:
-        current_session = current_session_rows.iloc[0]
-    else:
-        current_session = None
-    
+    current_session = get_session_row()
     classification = result["classification"]
     factors = result["factors"]
     factor_df = build_factor_dataframe(factors)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("우울 0~3점", classification.get("depression", 0))
-    c2.metric("불안 0~3점", classification.get("anxiety", 0))
-    c3.metric("중독 0~3점", classification.get("addiction", 0))
-    c4.metric("보고서 백엔드", result["model_info"]["backend"])
-    
-    st.markdown("### 데이터셋 원본 라벨")
+    depression_score = float(classification.get("depression", 0))
+    anxiety_score = float(classification.get("anxiety", 0))
+    addiction_score = float(classification.get("addiction", 0))
+    review_score = int(round(((depression_score + anxiety_score + addiction_score) / 9) * 100))
 
-    if current_session is not None:
-        label_cols = st.columns(4)
+    metric_items = [
+        ("우울 위험도", f"{depression_score:.0f} / 3", risk_status(depression_score)),
+        ("불안 위험도", f"{anxiety_score:.0f} / 3", risk_status(anxiety_score)),
+        ("중독 위험도", f"{addiction_score:.0f} / 3", risk_status(addiction_score)),
+        ("검토 필요도", f"{review_score}%", "상담사 확인 필요" if review_score >= 45 else "안정"),
+    ]
 
-        with label_cols[0]:
-            st.metric("우울 원본 라벨", int(current_session.get("depression", 0)))
+    metric_cols = st.columns(4)
 
-        with label_cols[1]:
-            st.metric("불안 원본 라벨", int(current_session.get("anxiety", 0)))
+    for col, (label, value, status) in zip(metric_cols, metric_items):
+        with col:
+            st.markdown(
+                f"""
+                <div class="risk-metric-card">
+                    <div class="risk-metric-label">{html_escape(str(label))}</div>
+                    <div class="risk-metric-value">{html_escape(str(value))}</div>
+                    <span class="risk-metric-status">{html_escape(str(status))}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-        with label_cols[2]:
-            st.metric("중독 원본 라벨", int(current_session.get("addiction", 0)))
+    top_factor_df = factor_df.sort_values(["점수", "요인"], ascending=[False, True]).head(8)
+    top_items = [str(row["요인"]) for _, row in top_factor_df.iterrows() if int(row["점수"]) > 0]
+    symptom_items = top_items[:3] or ["상담 내용 추가 확인"]
+    risk_items = top_items[3:6] or ["위험 요인 추가 확인"]
 
-        with label_cols[3]:
-            st.metric("데이터 class", str(current_session.get("class", "미상")))
+    ai_summary = {
+        "symptom": {
+            "title": "주요 증상",
+            "icon": "S",
+            "items": symptom_items,
+            "note": "상담 기록에서 상대적으로 높게 표시된 증상 요인을 정리합니다.",
+        },
+        "risk": {
+            "title": "위험 요인",
+            "icon": "!",
+            "items": risk_items,
+            "note": "추가 확인이 필요한 정서·행동 신호를 상담사가 검토합니다.",
+        },
+        "improve": {
+            "title": "개선 요인",
+            "icon": "+",
+            "items": ["상담 참여", "상태 언어화", "변화 가능성"],
+            "note": "내담자의 보호요인과 변화 자원을 함께 확인합니다.",
+        },
+        "intervention": {
+            "title": "개입 요인",
+            "icon": "I",
+            "items": ["감정 명명", "자동사고 탐색", "다음 회기 과제"],
+            "note": "상담사 개입 방향을 다음 회기 계획과 연결합니다.",
+        },
+    }
 
-        st.caption(
-            f"현재 선택 회기: {selected_client_id} / {selected_session} / "
-            f"{current_session.get('split', 'split 미상')} / {current_session.get('filename', 'filename 미상')}"
-        )
-    else:
-        st.info("현재 선택한 회기의 원본 라벨 정보를 찾지 못했습니다.")
+    cards_html = ""
 
-    st.caption("주의: 위 값은 모델 출력 기반 참고값이며, 임상 진단 또는 표준화 검사 점수로 단정하지 않습니다.")
+    for key, card in ai_summary.items():
+        items_html = "".join([f"<li>{html_escape(str(item))}</li>" for item in card["items"]])
+        cards_html += f"""
+<div class="ai-summary-card {key}">
+    <div class="ai-summary-head">
+        <div class="ai-summary-icon {key}">{html_escape(str(card["icon"]))}</div>
+        <div class="ai-summary-card-title">{html_escape(str(card["title"]))}</div>
+    </div>
+    <ul class="ai-summary-list">{items_html}</ul>
+    <div class="ai-summary-note {key}">{html_escape(str(card["note"]))}</div>
+</div>
+"""
 
-    st.divider()
-
-    left, right = st.columns([0.58, 0.42], gap="large")
-
-    with left:
-        st.markdown("#### 세부 요인 점수")
-        fig = px.bar(
-            factor_df.sort_values("점수", ascending=True),
-            x="점수",
-            y="요인",
-            color="카테고리",
-            orientation="h",
-            range_x=[0, 3],
-            height=680,
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with right:
-        st.markdown("#### 주요 요인 표")
-        st.dataframe(
-            factor_df.sort_values(["점수", "카테고리"], ascending=[False, True]),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.markdown("#### 안전 확인")
-        if factors.get("suicidal", 0) > 0:
-            st.error("자해/자살 관련 발화 가능성이 표시되었습니다. 상담사가 별도 안전 평가를 수행해야 합니다.")
-        else:
-            st.success("현재 mock 분석 결과에서는 자해/자살 관련 라벨이 0입니다.")
-
-    st.divider()
-
-    trend = pd.DataFrame(
-        {
-            "회기": ["1회기", "2회기", "3회기", "현재"],
-            "우울": [2.8, 2.6, 2.4, classification.get("depression", 0) * 3],
-            "불안": [2.7, 2.5, 2.4, classification.get("anxiety", 0) * 3],
-            "수면문제": [3.0, 3.0, 3.0, factors.get("sleep_disturbance", 0)],
-            "피로감": [2.2, 2.6, 3.0, factors.get("fatigue", 0)],
-        }
+    st.markdown(
+        f"""<div class="ai-summary-section">
+<div class="ai-summary-title">AI 분석 요약</div>
+<div class="ai-summary-grid">
+{cards_html}
+</div>
+<div class="ai-summary-footnote">
+    위 요약은 AI 분석 결과의 보조 참고 자료이며, 최종 판단과 상담 방향은 상담사의 전문적 판단을 우선합니다.
+</div>
+</div>""",
+        unsafe_allow_html=True,
     )
 
-    st.markdown("#### 회기별 추이 예시")
+    st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
+
+    hira_col, insight_col = st.columns([0.52, 0.48], gap="large")
+
+    with hira_col:
+        st.markdown('<div class="chart-panel-title">HIRA 인구통계 비교</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="chart-panel-desc">현재 내담자와 예시 인구통계 지표를 비교합니다.</div>',
+            unsafe_allow_html=True,
+        )
+        comparison_df = build_hira_comparison_dataframe(review_score)
+        fig_compare = px.bar(
+            comparison_df,
+            x="그룹",
+            y="비율",
+            text="비율",
+            color="그룹",
+            color_discrete_sequence=["#2563EB", "#93C5FD", "#BFDBFE"],
+            height=285,
+        )
+        fig_compare.update_layout(
+            showlegend=False,
+            margin=dict(l=8, r=8, t=18, b=18),
+            yaxis_title="비율(%)",
+            xaxis_title="",
+            bargap=0.55,
+        )
+        fig_compare.update_traces(texttemplate="%{text:.1f}%", textposition="outside", marker_line_width=0)
+        style_dashboard_chart(fig_compare)
+        st.plotly_chart(fig_compare, use_container_width=True)
+        st.caption("예시 데이터입니다. 실제 HIRA 통계 연동 후 연령·성별·지역별 비교 지표로 대체됩니다.")
+
+    with insight_col:
+        st.markdown(
+            """<div class="dashboard-side-note">
+<div class="dashboard-side-note-title">비교 해석 메모</div>
+<div class="dashboard-side-note-body">
+    현재 차트는 선택 내담자의 검토 필요도와 예시 인구통계 평균을 비교하는 자리입니다.
+    실제 HIRA 통계가 연결되면 연령·성별·지역 기준의 상대적 수준을 함께 보여줄 수 있습니다.
+</div>
+<ul class="dashboard-side-note-list">
+    <li>현재 내담자의 위험도 수준 확인</li>
+    <li>동일 연령·성별·지역 평균과 비교</li>
+    <li>상담 계획 수립 시 참고 지표로 활용</li>
+</ul>
+</div>""",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
+
+    trend = build_trend_dataframe(
+        client_sessions=client_sessions,
+        selected_session=st.session_state.selected_session,
+        depression_score=depression_score,
+        anxiety_score=anxiety_score,
+        factors=factors,
+    )
+
+    st.markdown('<div class="chart-panel-title">회기별 추이 차트</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="chart-panel-desc">상담 회기별 주요 지표 변화를 추적합니다.</div>',
+        unsafe_allow_html=True,
+    )
+
     fig_trend = px.line(
         trend,
         x="회기",
         y=["우울", "불안", "수면문제", "피로감"],
         markers=True,
-        height=420,
+        range_y=[0, 3],
+        color_discrete_sequence=["#2563EB", "#60A5FA", "#A78BFA", "#94A3B8"],
+        height=390,
     )
+    fig_trend.update_layout(margin=dict(l=10, r=140, t=20, b=20), yaxis_title="점수 (0-3)", xaxis_title="")
+    fig_trend.update_traces(line=dict(width=2.2), marker=dict(size=7))
+    style_dashboard_chart(fig_trend)
     st.plotly_chart(fig_trend, use_container_width=True)
+    st.caption("실제 상담 기록을 기반으로 회기별 점수(0~3)가 표시됩니다.")
+
+    st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="chart-panel-title">세부 요인 막대 그래프</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="chart-panel-desc">28개 요인을 카테고리별로 그루핑합니다. 기본 화면에서는 상위 10개 요인을 먼저 보여줍니다.</div>',
+        unsafe_allow_html=True,
+    )
+
+    if "factor_selected_categories" not in st.session_state:
+        st.session_state.factor_selected_categories = ["우울", "불안", "중독"]
+
+    category_options = ["우울", "불안", "중독"]
+    selected_categories = st.pills(
+        "요인 카테고리",
+        options=category_options,
+        selection_mode="multi",
+        default=st.session_state.factor_selected_categories,
+        key="factor_category_pills",
+        label_visibility="collapsed",
+    )
+    st.session_state.factor_selected_categories = selected_categories
+
+    filtered_factor_df = factor_category_filter(factor_df, st.session_state.factor_selected_categories)
+
+    if filtered_factor_df.empty:
+        st.info("선택한 카테고리에 표시할 요인이 없습니다.")
+    else:
+        selected_factor_df = (
+            filtered_factor_df.sort_values(["점수", "요인"], ascending=[False, True])
+            .head(10)
+            .sort_values("점수", ascending=True)
+        )
+
+        fig_factor = px.bar(
+            selected_factor_df,
+            x="점수",
+            y="요인",
+            color="카테고리",
+            orientation="h",
+            range_x=[0, 3],
+            color_discrete_map={
+                "우울": "#2563EB",
+                "불안": "#60A5FA",
+                "중독": "#93C5FD",
+                "상담사 개입": "#CBD5E1",
+                "변화/기타": "#E2E8F0",
+            },
+            height=440,
+        )
+        fig_factor.update_layout(margin=dict(l=10, r=140, t=20, b=20), xaxis_title="점수", yaxis_title="", bargap=0.58)
+        fig_factor.update_traces(marker_line_width=0)
+        style_dashboard_chart(fig_factor)
+        st.plotly_chart(fig_factor, use_container_width=True)
+
+        with st.expander("전체 28요인 보기", expanded=False):
+            all_factor_chart_df = (
+                factor_df.sort_values(["점수", "요인"], ascending=[False, True])
+                .sort_values("점수", ascending=True)
+            )
+
+            fig_all_factor = px.bar(
+                all_factor_chart_df,
+                x="점수",
+                y="요인",
+                color="카테고리",
+                orientation="h",
+                range_x=[0, 3],
+                color_discrete_map={
+                    "우울": "#2563EB",
+                    "불안": "#60A5FA",
+                    "중독": "#93C5FD",
+                    "상담사 개입": "#CBD5E1",
+                    "변화/기타": "#E2E8F0",
+                },
+                height=760,
+            )
+
+            fig_all_factor.update_layout(margin=dict(l=10, r=140, t=20, b=20), xaxis_title="점수", yaxis_title="", bargap=0.42, showlegend=True,)
+
+            fig_all_factor.update_traces(marker_line_width=0)
+            style_dashboard_chart(fig_all_factor)
+
+            st.plotly_chart(fig_all_factor, use_container_width=True)
+
+    if factors.get("suicidal", 0) > 0:
+        st.error("자해/자살 관련 발화 가능성이 표시되었습니다. 상담사가 별도 안전 평가를 수행해야 합니다.")
+
+    st.caption(
+        f"현재 선택 회기: {st.session_state.selected_client} / {st.session_state.selected_session} / "
+        f"{current_session.get('상담일', '상담일 미상')} / {current_session.get('상담 주제', '주제 미상')}"
+    )
 
 
 # =========================================================
 # 14. AI 보고서
 # =========================================================
 def render_report():
-    st.markdown('<div class="section-title">AI 보고서</div>', unsafe_allow_html=True)
+    st.markdown('<div class="patient-title">AI 보고서</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-desc">KoAlpaca 요약 모델이 들어갈 위치입니다. 현재는 선택한 보고서 백엔드 결과를 표시합니다.</div>',
+        '<div class="page-desc">AI가 생성한 상담 보고서를 확인하고, 필요한 내용을 수정한 뒤 저장·다운로드할 수 있습니다.</div>',
         unsafe_allow_html=True,
     )
 
     result = st.session_state.analysis_result
 
+    if "report_preview_mode" not in st.session_state:
+        st.session_state.report_preview_mode = False
+
     if result is None:
         st.info("아직 분석 결과가 없습니다. 먼저 상담내역 기록·추가 화면에서 AI 분석을 실행하세요.")
         return
 
-    backend = result.get("model_info", {}).get("backend", "unknown")
-    summarizer_name = result.get("model_info", {}).get("summarizer", "unknown")
-
-    if backend == "mock":
-        st.warning("현재 보고서는 mock 요약 결과입니다. 실제 KoAlpaca API 결과가 아닙니다.")
-    elif backend == "koalpaca_api":
-        st.info(f"보고서 생성 백엔드: {summarizer_name}")
-    else:
-        st.info(f"보고서 생성 백엔드: {summarizer_name}")
-
     report_text = build_report_text(result)
 
-    edited_report = st.text_area(
-        "보고서 초안",
-        value=report_text,
-        height=620,
+    def extract_section(text: str, number: int, fallback: str = "") -> str:
+        pattern = rf"{number}\.\s*[^\n]*\n(.*?)(?=\n\d+\.\s|\Z)"
+        match = re.search(pattern, text, flags=re.S)
+
+        if match:
+            return match.group(1).strip()
+
+        return fallback
+
+    classification = result.get("classification", {})
+    factor_df = build_factor_dataframe(result.get("factors", {})).sort_values("점수", ascending=False).head(5)
+    top_factor_text = ", ".join(
+        [f"{row['요인']}({row['점수']})" for _, row in factor_df.iterrows() if int(row["점수"]) > 0]
+    ) or "뚜렷하게 상승한 세부 요인은 제한적입니다."
+
+    section_1 = extract_section(
+        report_text,
+        1,
+        (
+            f"우울 {classification.get('depression', 0)}/3, 불안 {classification.get('anxiety', 0)}/3, "
+            f"중독 {classification.get('addiction', 0)}/3 수준으로 분류되었습니다.\n"
+            f"상위 세부 요인은 {top_factor_text}입니다.\n"
+            f"{result.get('summary', '')}"
+        ),
+    )
+    section_2 = extract_section(
+        report_text,
+        2,
+        "수면, 피로, 회피 행동, 자기비하적 사고, 일상 기능 저하 가능성을 중심으로 추가 확인이 필요합니다.",
+    )
+    section_3 = extract_section(
+        report_text,
+        3,
+        "내담자가 문제 상황을 언어화하고 상담 장면에 참여하고 있다는 점은 개입의 기반이 될 수 있습니다.",
+    )
+    section_4 = extract_section(
+        report_text,
+        4,
+        "상담사는 수면 양상 확인, 감정 명명, 자동사고 탐색, 공감 및 지지, 다음 회기 과제 설정을 중심으로 개입할 수 있습니다.",
+    )
+    section_5 = extract_section(
+        report_text,
+        5,
+        "다음 회기에서는 수면 양상, 출근 전 불안 상황, 회피 행동, 자기비하적 사고, 현재 대처 방식을 구체적으로 확인합니다.",
     )
 
-    pdf_bytes = make_pdf_report_bytes(edited_report)
-    docx_bytes = make_docx_report_bytes(edited_report)
+    edited_sections = {
+        "report_section_1": st.session_state.get("report_section_1", section_1),
+        "report_section_2": st.session_state.get("report_section_2", section_2),
+        "report_section_3": st.session_state.get("report_section_3", section_3),
+        "report_section_4": st.session_state.get("report_section_4", section_4),
+    }
 
-    c1, c2, c3 = st.columns(3)
+    edited_report = f"""[상담보고서 초안]
 
-    with c1:
+0. AI 판별 결과
+- 우울 관련 라벨: {classification.get("depression", 0)}
+- 불안 관련 라벨: {classification.get("anxiety", 0)}
+- 중독 관련 라벨: {classification.get("addiction", 0)}
+
+주의:
+위 값은 모델 출력 기반 참고값이며, 임상 진단 또는 표준화 검사 점수로 단정하지 않는다.
+
+1. 주요 증상
+{edited_sections["report_section_1"]}
+
+2. 위험 요인
+{edited_sections["report_section_2"]}
+
+3. 개선 요인
+{edited_sections["report_section_3"]}
+
+4. 상담사 개입 요인
+{edited_sections["report_section_4"]}
+
+5. 다음 회기 계획
+{section_5}
+"""
+
+    report_client_id = str(st.session_state.selected_client)
+    report_session_label = str(st.session_state.selected_session)
+    pdf_bytes = make_pdf_report_bytes(edited_report, client_id=report_client_id, session_label=report_session_label)
+    docx_bytes = make_docx_report_bytes(edited_report, client_id=report_client_id, session_label=report_session_label)
+    md_download_label = f"![md]({get_png_data_uri(MD_ICON_PATH)}) MD 다운로드"
+    pdf_download_label = f"![pdf]({get_png_data_uri(PDF_ICON_PATH)}) PDF 다운로드"
+    docx_download_label = f"![docx]({get_png_data_uri(DOCX_ICON_PATH)}) DOCX 다운로드"
+
+    if st.session_state.report_preview_mode:
+        close_col, spacer, md_col, pdf_col, docx_col = st.columns([0.06, 0.46, 0.16, 0.16, 0.16], gap="small")
+
+        with close_col:
+            if st.button("<", key="report_preview_close", use_container_width=True, help="편집 화면으로 돌아가기"):
+                st.session_state.report_preview_mode = False
+                st.rerun()
+
+        with md_col:
+            st.download_button(
+                md_download_label,
+                data=edited_report.encode("utf-8"),
+                file_name=f"{st.session_state.selected_client}_{st.session_state.selected_session}_report.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+
+        with pdf_col:
+            st.download_button(
+                pdf_download_label,
+                data=pdf_bytes if pdf_bytes is not None else b"",
+                file_name=f"{st.session_state.selected_client}_{st.session_state.selected_session}_report.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                disabled=pdf_bytes is None,
+            )
+
+        with docx_col:
+            st.download_button(
+                docx_download_label,
+                data=docx_bytes if docx_bytes is not None else b"",
+                file_name=f"{st.session_state.selected_client}_{st.session_state.selected_session}_report.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                disabled=docx_bytes is None,
+            )
+    else:
+        spacer, b1, b2 = st.columns([0.72, 0.13, 0.15], gap="small")
+
+        with b1:
+            save_clicked = st.button("저장", type="primary", use_container_width=True)
+
+        with b2:
+            preview_clicked = st.button("미리보기", use_container_width=True)
+
+
+        if save_clicked:
+            st.success("보고서 수정 내용이 현재 화면에 반영되었습니다. 실제 DB 저장은 추후 연동 예정입니다.")
+
+        if preview_clicked:
+            st.session_state.report_preview_mode = True
+            st.rerun()
+
+    if pdf_bytes is None:
+        st.caption("PDF 다운로드는 WeasyPrint 설치 후 활성화됩니다.")
+
+    if docx_bytes is None:
+        st.caption("DOCX 다운로드는 python-docx 설치 후 활성화됩니다.")
+
+    if st.session_state.report_preview_mode:
+        client = get_client_row()
+        session = get_session_row()
+        gender = str(client.get("성별", ""))
+        age = str(client.get("연령대", client.get("연령", "")))
+        region = str(client.get("지역", ""))
+        concern = str(client.get("상담 유형", ""))
+        created_date = str(session.get("상담일", datetime.now().strftime("%Y.%m.%d")))
+        one_line_summary = edited_sections.get("report_section_1", "").split("\n")[0]
+
+        if not one_line_summary.strip():
+            one_line_summary = "상담 기록을 바탕으로 주요 증상과 위험 요인을 요약한 보고서입니다."
+
+        preview_html = f"""<div class="report-preview-shell">
+<div class="report-preview-date">작성일: {html_escape(created_date)}</div>
+<div class="report-preview-title">상담 요약 보고서</div>
+<div class="report-preview-divider"></div>
+
+<div class="report-preview-chip-row">
+    <div class="report-preview-chip">👤 {html_escape(report_client_id)}</div>
+    <div class="report-preview-chip">📅 {html_escape(report_session_label)}</div>
+    <div class="report-preview-chip">📍 {html_escape(age)} {html_escape(gender)} · {html_escape(region)}</div>
+    <div class="report-preview-chip">♡ {html_escape(concern)}</div>
+</div>
+
+<div class="report-preview-summary">
+    <div class="report-preview-summary-title">한줄 요약</div>
+    <div class="report-preview-summary-body">{html_escape(one_line_summary)}</div>
+</div>
+
+<div class="report-preview-section">
+    <div class="report-preview-section-title">1. 주요 증상</div>
+    <div class="report-preview-section-body">{html_escape(edited_sections.get("report_section_1", ""))}</div>
+</div>
+
+<div class="report-preview-section">
+    <div class="report-preview-section-title">2. 위험 요인</div>
+    <div class="report-preview-section-body">{html_escape(edited_sections.get("report_section_2", ""))}</div>
+</div>
+
+<div class="report-preview-section">
+    <div class="report-preview-section-title">3. 개선 요인</div>
+    <div class="report-preview-section-body">{html_escape(edited_sections.get("report_section_3", ""))}</div>
+</div>
+
+<div class="report-preview-section">
+    <div class="report-preview-section-title">4. 상담사 개입 요인</div>
+    <div class="report-preview-section-body">{html_escape(edited_sections.get("report_section_4", ""))}</div>
+</div>
+
+<div class="report-preview-section">
+    <div class="report-preview-section-title">5. 다음 회기 계획</div>
+    <div class="report-preview-section-body">{html_escape(section_5)}</div>
+</div>
+
+<div class="report-preview-chart-panel">
+    <div class="report-preview-chart-title">첨부 차트 <span style="font-weight:400; color:#64748B;">(대시보드 차트 포함)</span></div>
+    <div class="report-preview-chart-grid">
+        <div class="report-preview-mini-chart">위험도 요약 카드</div>
+        <div class="report-preview-mini-chart">요인 분석 바 차트</div>
+        <div class="report-preview-mini-chart">HIRA 인구통계 비교</div>
+    </div>
+</div>
+</div>
+
+<div class="report-preview-footer-note">
+    AI가 생성한 보고서입니다. 상담사의 전문적 판단에 따라 내용을 검토·수정하여 사용하시기 바랍니다.
+</div>
+"""
+
+        st.markdown(preview_html, unsafe_allow_html=True)
+        return
+
+    report_sections = [
+        ("1. 주요 증상", "report_section_1", section_1),
+        ("2. 위험 요인", "report_section_2", section_2),
+        ("3. 개선 요인", "report_section_3", section_3),
+        ("4. 상담사 개입 요인", "report_section_4", section_4),
+    ]
+
+    for title, key, value in report_sections:
+        with st.container(border=True):
+            st.markdown(
+                f"""
+                <div class="report-section-head">
+                    <div class="report-section-title">
+                        {title}
+                        <span class="report-edit-badge">편집 가능</span>
+                    </div>
+                    <div class="report-edit-icon">edit</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.text_area(title, value=st.session_state.get(key, value), height=118, label_visibility="collapsed", key=key)
+
+    st.markdown(
+        """
+        <div class="report-plan-panel">
+            <div class="report-plan-title">다음 회기 계획 추천</div>
+            <div class="report-plan-grid">
+                <div class="report-plan-card">
+                    <div class="report-plan-card-title">목표</div>
+                    <ul>
+                        <li>불안 및 걱정 수준을 관찰 가능한 지표로 기록한다.</li>
+                        <li>수면과 피로 양상의 변화를 다음 회기까지 추적한다.</li>
+                        <li>회피 행동을 줄이고 사회적 상호작용을 점진적으로 늘린다.</li>
+                    </ul>
+                </div>
+                <div class="report-plan-card">
+                    <div class="report-plan-card-title">기법</div>
+                    <ul>
+                        <li>인지 재구성 및 사고기록지 활용</li>
+                        <li>호흡 명상 및 점진적 근이완 훈련</li>
+                        <li>노출 계층표 작성 후 점진적 노출</li>
+                    </ul>
+                </div>
+                <div class="report-plan-card">
+                    <div class="report-plan-card-title">과제</div>
+                    <ul>
+                        <li>매일 10분 호흡 명상 실천 및 기록</li>
+                        <li>수면 일지 작성 및 수면 위생 실천</li>
+                        <li>주 3회 30분 이상 가벼운 운동 실천</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="report-chart-preview">
+            <div class="report-section-title">포함 차트 미리보기</div>
+            <div class="page-desc">보고서 다운로드 시 포함될 차트 영역입니다. 현재 화면에서는 자리만 표시합니다.</div>
+            <div class="chart-placeholder-grid">
+                <div class="chart-placeholder-card">위험도 요약 차트 영역</div>
+                <div class="chart-placeholder-card">요인 분석 차트 영역</div>
+                <div class="chart-placeholder-card">HIRA 비교 차트 영역</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="report-footnote">AI가 생성한 보고서입니다. 상담사의 전문적 판단에 따라 내용을 검토·수정하여 사용하시기 바랍니다.</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
+
+
+
+    download_spacer, md_col, pdf_col, docx_col = st.columns(
+        [0.46, 0.18, 0.18, 0.18],
+        gap="small",
+    )
+
+    with md_col:
         st.download_button(
-            "Markdown 다운로드",
+            md_download_label,
             data=edited_report.encode("utf-8"),
             file_name=f"{st.session_state.selected_client}_{st.session_state.selected_session}_report.md",
             mime="text/markdown",
             use_container_width=True,
         )
 
-    with c2:
+    with pdf_col:
         st.download_button(
-            "PDF 다운로드",
+            pdf_download_label,
             data=pdf_bytes if pdf_bytes is not None else b"",
             file_name=f"{st.session_state.selected_client}_{st.session_state.selected_session}_report.pdf",
             mime="application/pdf",
             use_container_width=True,
             disabled=pdf_bytes is None,
         )
-        if pdf_bytes is None:
-            st.caption("reportlab 설치 후 활성화됩니다.")
 
-    with c3:
+    with docx_col:
         st.download_button(
-            "DOCX 다운로드",
+            docx_download_label,
             data=docx_bytes if docx_bytes is not None else b"",
             file_name=f"{st.session_state.selected_client}_{st.session_state.selected_session}_report.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True,
             disabled=docx_bytes is None,
         )
-        if docx_bytes is None:
-            st.caption("python-docx 설치 후 활성화됩니다.")
 
 
 # =========================================================
@@ -1907,36 +5078,225 @@ def render_quick_question_buttons():
 
 
 def render_chatbot():
-    st.markdown('<div class="section-title">RAG 상담 보조 챗봇</div>', unsafe_allow_html=True)
-    
-    st.markdown(
-        '<div class="page-desc">ChromaDB 기반 유사 상담 사례 검색과 임상 reference 검색이 들어갈 위치입니다.</div>',
-        unsafe_allow_html=True,
-    )
-    st.warning("현재 RAG 챗봇은 mock 응답입니다. 아직 ChromaDB 검색과 실제 LLM 답변 생성이 연결되지 않았습니다.")
-    
-    c1, c2 = st.columns([0.22, 0.78])
+    st.markdown('<span class="chatbot-page-marker"></span>', unsafe_allow_html=True)
+    header_text_col, clear_col = st.columns([0.84, 0.16], vertical_alignment="top")
 
-    with c1:
-        if st.button("대화 초기화", use_container_width=True):
-            clear_chat()
-            st.rerun()
-
-        st.info(
-            "현재 단계: mock RAG\n\n"
-            "추후 단계에서 ChromaDB 검색 결과와 LLM 답변을 연결합니다."
+    with header_text_col:
+        st.markdown(
+            '<div class="patient-title">상담 보조 챗봇</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="page-desc">상담 기록, 유사 사례, 임상 참고자료를 바탕으로 상담사가 다음 회기를 준비할 수 있도록 돕는 AI 보조 화면입니다.</div>',
+            unsafe_allow_html=True,
         )
 
-    with c2:
-        render_quick_question_buttons()
-        render_chat_messages()
-
-        user_prompt = st.chat_input("상담 기록에 대해 질문하세요.")
-
-        if user_prompt:
-            add_mock_answer(user_prompt)
+    with clear_col:
+        st.markdown('<span class="chat-clear-button-marker"></span>', unsafe_allow_html=True)
+        if st.button("대화 초기화", use_container_width=True):
+            st.session_state.chat_messages = []
             st.rerun()
 
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = [
+            {
+                "role": "assistant",
+                "content": (
+                    "안녕하세요, CounsHelper AI 도우미입니다.\n"
+                    "상담 관련 질문이나 도움이 필요한 내용을 자유롭게 입력해주세요."
+                ),
+                "sources": [],
+                "time": datetime.now().strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후"),
+            }
+        ]
+
+    if st.session_state.pop("clear_chatbot_input", False):
+        st.session_state.chatbot_input = ""
+
+    quick_questions = [
+        ("유사사례 검색", "내담자의 주요 위험 요인과 비슷한 사례를 찾아줘."),
+        ("임상 가이드라인", "수면 문제와 불안을 중심으로 참고할 임상 가이드라인을 정리해줘."),
+        ("상담 이론", "현재 상담 기록에 적용할 수 있는 상담 이론을 알려줘."),
+        ("다음 회기 개입 방법", "다음 회기에서 사용할 수 있는 개입 방법을 제안해줘."),
+    ]
+
+    def now_time_label():
+        return datetime.now().strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후")
+
+    def mock_rag_answer(question: str) -> dict:
+        q = question.strip()
+
+        if "유사" in q or "사례" in q:
+            content = (
+                "선택한 내담자의 주요 위험 요인과 비슷한 사례를 기준으로 정리하면 다음과 같습니다.\n\n"
+                "• 핵심 위험 요인: 지속적인 스트레스, 수면의 질 저하, 완벽주의 성향, 휴식 부족\n"
+                "• 유사 사례: 비슷한 요인을 가진 직장인 상담 사례를 우선 확인할 수 있습니다.\n"
+                "• 다음 회기 제안: 불안 완화 전략, 수면 습관 점검, 인지 재구성을 함께 다루는 것이 좋습니다."
+            )
+            sources = ["AI-Hub 유사 상담 사례", "상담 기록 요인 분석 결과"]
+
+        elif "가이드라인" in q or "임상" in q:
+            content = (
+                "수면 문제와 불안을 함께 호소하는 경우에는 다음 항목을 우선 확인하는 것이 좋습니다.\n\n"
+                "• 수면 양상: 입면 지연, 중간 각성, 기상 후 피로감\n"
+                "• 불안 촉발 상황: 업무, 대인관계, 평가 상황, 미래 걱정\n"
+                "• 안전 확인: 자해·자살 관련 발화 여부\n"
+                "• 개입 방향: 수면위생 교육, 호흡 훈련, 걱정 기록지, 자동사고 탐색"
+            )
+            sources = ["임상 가이드라인 참고자료", "CBT 기반 상담 참고자료"]
+
+        elif "다음 회기" in q or "개입" in q:
+            content = (
+                "다음 회기에서 활용할 수 있는 개입 방법을 제안드립니다.\n\n"
+                "• 호흡 훈련: 복식호흡 1분 실습\n"
+                "• 수면 위생 점검: 카페인, 취침 전 스마트폰, 수면 루틴 확인\n"
+                "• 인지 재구성: 반복되는 자기비난 사고를 기록하고 대안적 사고 탐색\n"
+                "• 행동 활성화: 부담이 낮은 활동을 작은 단위로 계획"
+            )
+            sources = ["CBT 참고자료", "상담사 개입 요인 분석"]
+
+        elif "불안" in q:
+            content = (
+                "불안 완화를 위해 즉시 활용 가능한 간단한 실습은 다음과 같습니다.\n\n"
+                "1. 복식 호흡 1분: 들숨과 날숨을 천천히 관찰하기\n"
+                "2. grounding: 보이는 것, 들리는 것, 느껴지는 것을 차례로 말하기\n"
+                "3. 감정 이름 붙이기: 지금 느끼는 감정을 한 단어로 표현하고 강도 0~10 체크"
+            )
+            sources = ["불안 완화 상담기법 참고자료", "CBT 실습 자료"]
+
+        else:
+            content = (
+                "현재 질문을 바탕으로 상담 기록에서 확인할 수 있는 내용을 요약하면 다음과 같습니다.\n\n"
+                "• 내담자의 핵심 호소와 위험 요인을 먼저 확인합니다.\n"
+                "• 다음 회기에서는 수면, 피로, 불안, 회피 행동, 자기비하적 사고를 구체적으로 탐색할 수 있습니다.\n"
+                "• 필요한 경우 유사 사례와 임상 참고자료를 함께 검토하는 방향이 적절합니다."
+            )
+            sources = ["현재 상담 기록", "RAG mock reference"]
+
+        return {"content": content, "sources": sources}
+
+    def submit_chat_question(question: str) -> bool:
+        question = question.strip()
+
+        if not question:
+            return False
+
+        st.session_state.chat_messages.append(
+            {
+                "role": "user",
+                "content": question,
+                "sources": [],
+                "time": now_time_label(),
+            }
+        )
+
+        answer = mock_rag_answer(question)
+
+        st.session_state.chat_messages.append(
+            {
+                "role": "assistant",
+                "content": answer["content"],
+                "sources": answer["sources"],
+                "time": now_time_label(),
+            }
+        )
+
+        return True
+
+    def submit_chatbot_input():
+        if submit_chat_question(st.session_state.get("chatbot_input", "")):
+            st.session_state.chatbot_input = ""
+
+    def build_message_html(message: dict) -> str:
+        role = message.get("role", "assistant")
+        content = html_escape(str(message.get("content", ""))).replace("\n", "<br>")
+        sources = message.get("sources", [])
+        time_label = html_escape(str(message.get("time", now_time_label())))
+
+        if role == "user":
+            return f"""<div class="chat-row user">
+<div class="chat-bubble-wrap">
+<div class="chat-bubble">{content}</div>
+<div class="chat-time">{time_label} ✓✓</div>
+</div>
+</div>"""
+
+        source_html = ""
+
+        if sources:
+            chips = "".join(
+                f'<span class="chat-source-chip">출처: {html_escape(str(src))}</span>'
+                for src in sources
+            )
+            source_html = f'<div class="chat-source-row">{chips}</div>'
+
+        return f"""<div class="chat-row assistant">
+<div class="chat-avatar">AI</div>
+<div class="chat-bubble-wrap">
+<div class="chat-bubble">{content}{source_html}</div>
+<div class="chat-time">{time_label}</div>
+</div>
+</div>"""
+
+    messages_html = ""
+
+    for message in st.session_state.chat_messages:
+        messages_html += build_message_html(message)
+
+    st.markdown(
+        f"""
+        <div class="chat-page-card">
+            {messages_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container(key="chat_composer_bar"):
+        st.markdown('<span class="chat-composer-anchor"></span>', unsafe_allow_html=True)
+
+        if "chat_quick_pill_nonce" not in st.session_state:
+            st.session_state.chat_quick_pill_nonce = 0
+
+        quick_question_map = dict(quick_questions)
+
+        st.markdown('<span class="quick-question-marker"></span>', unsafe_allow_html=True)
+
+        selected_quick_question = st.pills(
+            "추천 질문",
+            options=list(quick_question_map.keys()),
+            selection_mode="single",
+            default=None,
+            key=f"chat_quick_question_pills_{st.session_state.chat_quick_pill_nonce}",
+            label_visibility="collapsed",
+            width="content",
+        )
+
+        if selected_quick_question:
+            submit_chat_question(quick_question_map[selected_quick_question])
+            st.session_state.chat_quick_pill_nonce += 1
+            st.rerun()
+
+        input_col, send_col = st.columns([0.94, 0.06], gap="small", vertical_alignment="center")
+
+        with input_col:
+            st.markdown('<span class="chat-input-marker"></span>', unsafe_allow_html=True)
+            user_question = st.text_input(
+                "상담 내용 입력",
+                placeholder="상담 내용을 입력하거나 질문을 작성하세요",
+                label_visibility="collapsed",
+                key="chatbot_input",
+                on_change=submit_chatbot_input,
+            )
+
+        with send_col:
+            st.markdown('<span class="chat-send-marker"></span>', unsafe_allow_html=True)
+            send_icon_label = f"![send]({get_png_data_uri(SEND_ICON_PATH)})"
+            send_clicked = st.button(send_icon_label, key="chatbot_send", use_container_width=True, help="전송")
+
+    if send_clicked and submit_chat_question(user_question):
+        st.session_state.clear_chatbot_input = True
+        st.rerun()
 
 # =========================================================
 # 16. Main
@@ -1945,10 +5305,12 @@ def main():
     init_session_state()
     apply_global_style()
     render_sidebar()
-    render_header()
-    render_main_nav()
 
-    if st.session_state.page == "상담내역 기록·추가":
+    if st.session_state.page == "내담자 홈":
+        render_patient_home()
+    elif st.session_state.page == "회기 상세":
+        render_session_detail()
+    elif st.session_state.page == "상담내역 기록·추가":
         render_record_page()
     elif st.session_state.page == "분석 대시보드":
         render_dashboard()
