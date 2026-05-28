@@ -1236,12 +1236,15 @@ def _render_dashboard_body() -> None:
 
     review_pct = int(sum(factors.values()) / (28 * 3) * 100) if factors else 0
     m = st.columns(4)
-    m[0].metric("우울 위험도", f"{int(scores.get('depression', 0))} / 3",
-                "양성" if classification.get("depression") else "낮음")
-    m[1].metric("불안 위험도", f"{int(scores.get('anxiety', 0))} / 3",
-                "양성" if classification.get("anxiety") else "낮음")
-    m[2].metric("중독 위험도", f"{int(scores.get('addiction', 0))} / 3",
-                "양성" if classification.get("addiction") else "낮음")
+    m[0].metric("우울 위험도",
+                "양성" if classification.get("depression") else "음성",
+                "위험" if classification.get("depression") else None)
+    m[1].metric("불안 위험도",
+                "양성" if classification.get("anxiety") else "음성",
+                "위험" if classification.get("anxiety") else None)
+    m[2].metric("중독 위험도",
+                "양성" if classification.get("addiction") else "음성",
+                "위험" if classification.get("addiction") else None)
     m[3].metric("검토 필요도", f"{review_pct}%",
                 "확인 필요" if review_pct >= 30 else "안정")
     st.caption("주의: 모델 출력 참고값 — 임상 진단/표준화 검사 점수로 단정하지 않음.")

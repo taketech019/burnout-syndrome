@@ -106,6 +106,10 @@ def extract_factors(
         return _empty_result(f"Gemma 28요인 호출 실패: {e}", backend=backend)
     if not isinstance(data, dict):
         return _empty_result("Gemma 28요인 JSON 파싱 실패", backend=backend)
+    missing = [k for k in FACTOR_KEYS if k not in data]
+    if missing:
+        log.warning("28요인 키 불일치 %d개: %s", len(missing), missing[:5])
+
     factors = _zero_factors()
     for k in FACTOR_KEYS:
         try:

@@ -191,10 +191,9 @@ def classify_text(script: str) -> dict:
     """F1 1단계 판별 — 통합 진입점.
 
     백엔드 선택 (CLASSIFIER_BACKEND 환경변수):
-      - 'gemma' (기본): Gemma 4 31B 1차
+      - 'kluebert_hf' (기본): HF Space
       - 'kluebert_local': 로컬 weights
-      - 'kluebert_hf': HF Space
-    실패 시 Gemma 폴백.
+    실패 시 에러 반환 (Gemini 폴백 없음).
 
     transcript 끝의 척도 평가(PHQ-9 등) 영역은 분리되어 모델 입력에서 제외.
     """
@@ -206,20 +205,20 @@ def classify_text(script: str) -> dict:
     if not script.strip():
         return _empty_result("입력 텍스트 비어 있음")
 
-    backend = os.getenv("CLASSIFIER_BACKEND", "gemma").lower()
+    backend = os.getenv("CLASSIFIER_BACKEND", "kluebert_hf").lower()
 
-    if backend == "kluebert_local" and _try_init_local():
+    if backend == "kluebert_local":
+        if not _try_init_local():
+            return _empty_result("로컬 KlueBERT 모델 로드 실패", backend="kluebert_local")
         try:
             return _predict_local(script)
         except Exception as e:
-            log.warning("로컬 추론 실패 → Gemma 폴백: %s", e)
+            return _empty_result(f"로컬 추론 실패: {e}", backend="kluebert_local")
 
     if backend == "kluebert_hf":
-        r = _call_kluebert_space(script)
-        if r["ok"]:
-            return r
+        return _call_kluebert_space(script)
 
-    return _predict_gemma(script)
+    return _empty_result(f"지원하지 않는 백엔드: {backend}", backend=backend)
 
 
 # ── 기존 호출 호환 (구 src.classifier.classify) ───────────────────────────────

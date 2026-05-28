@@ -28,7 +28,7 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "snunlp/KR-SBERT-V40K-klueNLI-aug
 # Gemma 4 31B는 TPM 16K 한도 잦은 초과로 폐기 (29k자 transcript 9 호출에 TPM 초과).
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.0-flash")
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
 
 # F3 KoAlpaca (Modal serverless)
 KOALPACA_ENDPOINT_URL = os.getenv("KOALPACA_ENDPOINT_URL", "")
