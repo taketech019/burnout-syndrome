@@ -77,7 +77,10 @@ GEMINI_API_KEY = get_secret("GEMINI_API_KEY", "")
 GEMINI_MODEL = get_secret("GEMINI_MODEL", "gemini-2.5-flash")
 
 CHROMA_DB_PATH = get_secret("CHROMA_DB_PATH", "./chroma_db")
-RAG_EMBEDDING_MODEL = get_secret("RAG_EMBEDDING_MODEL", "BAAI/bge-m3")
+RAG_EMBEDDING_MODEL = get_secret(
+    "RAG_EMBEDDING_MODEL",
+    "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
+)
 
 KLUEBERT_MODEL_NAME = get_secret("KLUEBERT_MODEL_NAME", "AIHub-KlueBERT-demo")
 KOALPACA_MODEL_NAME = get_secret("KOALPACA_MODEL_NAME", "Koalpaca-demo")
@@ -1579,6 +1582,36 @@ def build_rag_context_text(rag_results: List[Dict[str, Any]], max_chars_per_doc:
 
     return "\n\n".join(blocks)
 
+def clean_chatbot_answer(answer: str) -> str:
+    """
+    RAG/LLM 답변이 코드처럼 보이지 않도록 마크다운 잡음을 정리한다.
+    - --- 제거
+    - ### 제목 제거/정리
+    - 과도한 공백 정리
+    - '상담사님,' 같은 도입부는 유지
+    """
+    text = str(answer or "").strip()
+
+    # 코드블록이 섞인 경우 제거
+    text = text.replace("```markdown", "")
+    text = text.replace("```", "")
+
+    # 수평선 제거
+    text = re.sub(r"^\s*[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+
+    # ### 1. 제목 → 1. 제목 형태로 정리
+    text = re.sub(r"^\s*#{1,6}\s*", "", text, flags=re.MULTILINE)
+
+    # 굵게 표시용 **는 일부 남겨도 되지만, 너무 코드처럼 보이면 제거
+    text = text.replace("**", "")
+
+    # 특수 마크다운 리스트 기호 과다 정리
+    text = re.sub(r"^\s*[-*]\s+", "• ", text, flags=re.MULTILINE)
+
+    # 빈 줄 과다 제거
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
 
 def generate_rag_answer_with_gemini(
     question: str,
@@ -1641,12 +1674,25 @@ def generate_rag_answer_with_gemini(
 {question}
 
 [답변 형식]
+아래 번호 형식만 사용하세요. 마크다운 제목 기호(###), 수평선(---), 코드블록(```), 표는 사용하지 마세요.
+
 1. 핵심 요약
+- 현재 회기에서 확인되는 내용을 3~5문장으로 요약
+
 2. 근거 기반 유사 사례/참고 내용
+- RAG 검색 결과와 연결되는 유사 패턴 정리
+
 3. 다음 회기에서 확인할 내용
+- 상담사가 다음 회기에서 확인할 질문 후보 정리
+
 4. 개입 방향 초안
+- 상담사가 참고할 수 있는 개입 방향 초안 정리
+
 5. 주의사항
+- 진단 확정 금지, 상담사 최종 판단 필요, 자해/자살 관련 확인 필요 여부 정리
+
 6. 참고 출처
+- 사용한 출처 번호만 간단히 표시
 """
 
         response = model.generate_content(prompt)
@@ -1704,7 +1750,8 @@ def add_mock_answer(user_prompt: str):
         question=question,
         rag_results=rag_results,
     )
-
+    answer = clean_chatbot_answer(answer)
+    
     sources = []
 
     for item in rag_results:
@@ -4078,6 +4125,75 @@ def apply_global_style():
             margin-top: 0 !important;
         }}
 
+        .chat-answer-intro {{
+                background: #F8FAFC;
+                border: 1px solid #E2E8F0;
+                border-radius: 1rem;
+                padding: 0.9rem 1rem;
+                margin-bottom: 0.85rem;
+                color: #334155;
+                font-size: 0.95rem;
+                line-height: 1.75;
+            }}
+
+            .chat-answer-card {{
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 1rem;
+                padding: 1rem;
+                box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+            }}
+
+            .chat-answer-body {{
+                color: #1E293B;
+                font-size: 0.95rem;
+                line-height: 1.8;
+                word-break: keep-all;
+                overflow-wrap: anywhere;
+            }}
+
+            .chat-answer-section {{
+                background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+                border: 1px solid #E2E8F0;
+                border-radius: 1rem;
+                padding: 1rem 1.05rem;
+                margin: 0.85rem 0;
+                box-shadow: 0 8px 22px rgba(15, 23, 42, 0.035);
+            }}
+
+            .chat-answer-section-title {{
+                display: flex;
+                align-items: center;
+                gap: 0.55rem;
+                color: #0F172A;
+                font-weight: 800;
+                font-size: 1.02rem;
+                margin-bottom: 0.65rem;
+            }}
+
+            .chat-answer-section-number {{
+                display: inline-flex;
+                width: 1.65rem;
+                height: 1.65rem;
+                align-items: center;
+                justify-content: center;
+                border-radius: 999px;
+                background: #EEF3FF;
+                color: #4F6EF7;
+                font-size: 0.82rem;
+                font-weight: 800;
+                flex: 0 0 auto;
+            }}
+
+            .chat-answer-section-body {{
+                color: #334155;
+                font-size: 0.94rem;
+                line-height: 1.78;
+                word-break: keep-all;
+                overflow-wrap: anywhere;
+            }}
+
+
         /* 공통 챗봇 이동 버튼 */
         .chatbot-nav-button-marker {{
             display: none;
@@ -4143,8 +4259,8 @@ def apply_global_style():
             object-fit: contain !important;
             display: block !important;
             filter: brightness(0) invert(1) !important;
-        }}      
-
+        }}   
+           
         /* =========================================================
            내담자 홈 리디자인: 알약 탭 + 상담 요약 카드
         ========================================================= */
@@ -8391,11 +8507,16 @@ def render_chat_messages():
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-            if message["role"] == "assistant" and "sources" in message:
-                with st.expander("검색 근거 보기"):
-                    for source in message["sources"]:
-                        st.markdown(f"**{source['title']}**")
-                        st.caption(source["desc"])
+            if message["role"] == "assistant":
+                with st.chat_message("assistant"):
+                    render_chatbot_answer_card(message.get("content", ""))
+
+                    sources = message.get("sources", [])
+                    if sources:
+                        with st.expander("참고한 검색 결과", expanded=False):
+                            for idx, source in enumerate(sources, start=1):
+                                st.markdown(f"**출처 {idx}. {source.get('title', '출처 없음')}**")
+                                st.caption(source.get("desc", ""))
 
 
 def render_quick_question_buttons():
@@ -8415,6 +8536,67 @@ def render_quick_question_buttons():
                 add_mock_answer(question)
                 st.rerun()
 
+def render_chatbot_answer_card(content: str):
+    """
+    챗봇 답변을 코드처럼 보이지 않게 카드형 HTML로 렌더링한다.
+    번호 섹션을 감지해서 제목/본문을 분리한다.
+    """
+    text = clean_chatbot_answer(content)
+
+    # "1. 핵심 요약" 같은 번호 제목 기준으로 분리
+    section_pattern = r"(?m)^\s*(\d+)\.\s+([^\n]+)"
+    matches = list(re.finditer(section_pattern, text))
+
+    if not matches:
+        st.markdown(
+            f"""
+            <div class="chat-answer-card">
+                <div class="chat-answer-body">{html_escape(text).replace(chr(10), "<br>")}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    intro = text[:matches[0].start()].strip()
+
+    if intro:
+        st.markdown(
+            f"""
+            <div class="chat-answer-intro">
+                {html_escape(intro).replace(chr(10), "<br>")}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    for idx, match in enumerate(matches):
+        number = match.group(1)
+        title = match.group(2).strip()
+
+        body_start = match.end()
+        body_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = text[body_start:body_end].strip()
+
+        # bullet을 HTML 줄바꿈으로 자연스럽게 표시
+        body_html = html_escape(body)
+        body_html = body_html.replace("\n• ", "<br>• ")
+        body_html = body_html.replace("\n", "<br>")
+
+        st.markdown(
+            f"""
+            <div class="chat-answer-section">
+                <div class="chat-answer-section-title">
+                    <span class="chat-answer-section-number">{number}</span>
+                    {html_escape(title)}
+                </div>
+                <div class="chat-answer-section-body">
+                    {body_html}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 def render_chatbot():
     st.markdown('<span class="chatbot-page-marker"></span>', unsafe_allow_html=True)
@@ -8429,6 +8611,21 @@ def render_chatbot():
             '<div class="page-desc">상담 기록, 유사 사례, 임상 참고자료를 바탕으로 상담사가 다음 회기를 준비할 수 있도록 돕는 AI 보조 화면입니다.</div>',
             unsafe_allow_html=True,
         )
+    with st.expander("ChromaDB collection 확인", expanded=False):
+        try:
+            client = load_chroma_client()
+            collections = client.list_collections()
+
+            collection_names = []
+            for col in collections:
+                if hasattr(col, "name"):
+                    collection_names.append(col.name)
+                else:
+                    collection_names.append(str(col))
+
+            st.write(collection_names)
+        except Exception as e:
+            st.error(f"ChromaDB 로딩 오류: {e}")
 
     with clear_col:
         st.markdown('<span class="chat-clear-button-marker"></span>', unsafe_allow_html=True)
