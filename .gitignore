@@ -70,3 +70,4 @@ data/processed/*
 
 !chroma_db/
 !chroma_db/**
+data/processed/counseling_chunks.jsonl
