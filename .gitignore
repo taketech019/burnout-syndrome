@@ -1,5 +1,7 @@
 # 데이터 파일 무시, 폴더 구조(.gitkeep)는 유지
 !data/**/.gitkeep
+chroma_db/
+*.sqlite3
 *.db
 
 # 환경변수

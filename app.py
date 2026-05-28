@@ -8611,21 +8611,6 @@ def render_chatbot():
             '<div class="page-desc">상담 기록, 유사 사례, 임상 참고자료를 바탕으로 상담사가 다음 회기를 준비할 수 있도록 돕는 AI 보조 화면입니다.</div>',
             unsafe_allow_html=True,
         )
-    with st.expander("ChromaDB collection 확인", expanded=False):
-        try:
-            client = load_chroma_client()
-            collections = client.list_collections()
-
-            collection_names = []
-            for col in collections:
-                if hasattr(col, "name"):
-                    collection_names.append(col.name)
-                else:
-                    collection_names.append(str(col))
-
-            st.write(collection_names)
-        except Exception as e:
-            st.error(f"ChromaDB 로딩 오류: {e}")
 
     with clear_col:
         st.markdown('<span class="chat-clear-button-marker"></span>', unsafe_allow_html=True)
