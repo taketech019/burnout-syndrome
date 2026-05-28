@@ -137,34 +137,34 @@ CONTEXT_THEME = {
 }
 
 SERIES_COLOR_MAP = {
-    "우울": CONTEXT_THEME["depression"]["accent"],
-    "불안": CONTEXT_THEME["anxiety"]["accent"],
-    "중독": CONTEXT_THEME["addiction"]["accent"],
-    "수면문제": CONTEXT_THEME["sleep"]["accent"],
-    "피로감": CONTEXT_THEME["fatigue"]["accent"],
-    "상담사 개입": CONTEXT_THEME["intervention"]["accent"],
-    "변화/기타": "#B8C4D6",
+    "우울": "#6B8EF7",
+    "불안": "#B08AF5",
+    "중독": "#5ECADF",
+    "수면문제": "#7DD6CC",
+    "피로감": "#9AA9D6",
+    "상담사 개입": "#F6A6BE",
+    "변화/기타": "#CBD5E1",
 }
 
 FACTOR_CATEGORY_COLOR_MAP = {
-    "우울": CONTEXT_THEME["depression"]["accent"],
-    "불안": CONTEXT_THEME["anxiety"]["accent"],
-    "중독": CONTEXT_THEME["addiction"]["accent"],
-    "상담사 개입": CONTEXT_THEME["intervention"]["accent"],
-    "변화/기타": "#B8C4D6",
+    "우울": "#6B8EF7",
+    "불안": "#B08AF5",
+    "중독": "#5ECADF",
+    "상담사 개입": "#F6A6BE",
+    "변화/기타": "#CBD5E1",
 }
 
 DONUT_PALETTE = [
-    "#99CDD8",  # soft aqua blue
-    "#DAEBE3",  # pale mint
-    "#FDEDD3",  # warm cream
-    "#F3C3B2",  # soft peach
-    "#CFD6C4",  # sage gray
-    "#657166",  # deep muted green
-    "#F7CBCA",  # blush pink
-    "#D5E5E5",  # pale blue gray
-    "#D0DFD6",  # muted mint
-    "#F1F7F7",  # very light cool white
+    "#BFDBFE",  # soft blue
+    "#DDD6FE",  # soft violet
+    "#99F6E4",  # soft teal
+    "#FBCFE8",  # soft pink
+    "#FDE68A",  # soft amber
+    "#BBF7D0",  # soft green
+    "#BAE6FD",  # soft sky
+    "#CBD5E1",  # soft slate
+    "#F0ABFC",  # soft orchid
+    "#FDA4AF",  # soft rose
 ]
 
 # HELPER
@@ -1808,7 +1808,7 @@ SIDEBAR_BG = "#F1F5F9"
 CHATBOT_ICON_PATH = Path(__file__).resolve().parent / "assets" / "chatbot.png"
 SEND_ICON_PATH = Path(__file__).resolve().parent / "assets" / "send_icon.png"
 MD_ICON_PATH = Path(__file__).resolve().parent / "assets" / "md.png"
-PDF_ICON_PATH = Path(__file__).resolve().parent / "assets" / "pdf.png"
+PDF_ICON_PATH = Path(__file__).resolve().parent / "assets" / "PDF Ribbon.png"
 DOCX_ICON_PATH = Path(__file__).resolve().parent / "assets" / "docx.png"
 SEARCH_ICON_PATH = Path(__file__).resolve().parent / "assets" / "search.png"
 PROFILE_ICON_PATH = Path(__file__).resolve().parent / "assets" / "profile.png"
@@ -1830,6 +1830,14 @@ def get_png_data_uri(path: Path) -> str:
         return ""
 
     return f"data:image/png;base64,{encoded_png}"
+
+def build_download_label(icon_path: Path, fallback_icon: str, text: str) -> str:
+    icon_data_uri = get_png_data_uri(icon_path)
+
+    if icon_data_uri:
+        return f"![icon]({icon_data_uri}) {text}"
+
+    return f"{fallback_icon} {text}"
 
 def make_simple_pdf_report_bytes(report_text: str, title: str = "상담 요약 보고서") -> bytes | None:
     """
@@ -1982,6 +1990,23 @@ def apply_global_style():
             background: var(--sidebar-bg);
             border-right: 1px solid var(--border);
             box-shadow: 8px 0 24px rgba(15, 23, 42, 0.025);
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }}
+
+        section[data-testid="stSidebar"]::-webkit-scrollbar {{
+            display: none !important;
+            width: 0 !important;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {{
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stSidebarContent"]::-webkit-scrollbar {{
+            display: none !important;
+            width: 0 !important;
         }}
 
         section[data-testid="stSidebar"] .block-container {{
@@ -1991,7 +2016,7 @@ def apply_global_style():
         section[data-testid="stSidebar"] h1 {{
             color: var(--primary-dark);
             font-size: 1.34rem !important;
-            font-weight: 720 !important;
+            font-weight: 600 !important;
             letter-spacing: -0.045em;
             line-height: 1.12;
             margin-bottom: 0.25rem;
@@ -2064,7 +2089,7 @@ def apply_global_style():
         section[data-testid="stSidebar"] label {{
             color: var(--subtext) !important;
             font-size: 0.74rem !important;
-            font-weight: 500 !important;
+            font-weight: 400 !important;
         }}
 
         section[data-testid="stSidebar"] div[data-baseweb="select"] > div {{
@@ -2628,7 +2653,7 @@ def apply_global_style():
         }}
 
         .ai-summary-section {{
-            margin-top: 1.15rem;
+            margin-top: 0.25rem;
         }}
 
         .ai-summary-title {{
@@ -2696,9 +2721,15 @@ def apply_global_style():
         }}
 
         .ai-summary-footnote {{
-            color: var(--subtext);
+            display: flex;
+            align-items: flex-start;
+            gap: 0.48rem;
+            color: #7A7F8C;
             font-size: 0.76rem;
-            margin-top: 0.65rem;
+            font-weight: 400;
+            line-height: 1.48;
+            margin-top: 0.75rem;
+            word-break: keep-all;
         }}
 
         .dashboard-side-note {{
@@ -2707,6 +2738,238 @@ def apply_global_style():
             border-radius: 16px;
             padding: 1rem 1.05rem;
             min-height: 285px;
+        }}
+
+        .hira-detail-title {{
+            color: #0F172A;
+            font-size: 1.50rem;
+            font-weight: 520;
+            letter-spacing: -0.045em;
+            line-height: 2.05;
+            margin: -0.4rem 0 0.28rem;
+        }}
+
+        .hira-detail-desc {{
+            color: #64748B;
+            font-size: 0.9rem;
+            font-weight: 400;
+            line-height: 1.65;
+            margin-bottom: 1rem;
+        }}
+
+        .hira-donut-title {{
+            color: #0F172A;
+            font-size: 0.96rem;
+            font-weight: 620;
+            letter-spacing: -0.025em;
+            margin-bottom: 0.2rem;
+        }}
+
+        .hira-donut-title span {{
+            color: #64748B;
+            font-size: 0.74rem;
+            font-weight: 500;
+        }}
+
+        .hira-highlight-filter-marker {{
+            display: none;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) {{
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: flex-end !important;
+            transform: translateY(-1.5rem) !important;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) label {{
+            color: #0F172A !important;
+            font-size: 0.78rem !important;
+            font-weight: 540 !important;
+            margin-bottom: 0.18rem !important;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) div[data-baseweb="select"] > div {{
+            min-height: 1.95rem !important;
+            height: 1.95rem !important;
+            border-radius: 9px !important;
+            background: #F3F6FA !important;
+            border-color: #E2E8F0 !important;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) div[data-baseweb="select"] span {{
+            font-size: 0.8rem !important;
+            font-weight: 500 !important;
+            color: #0F172A !important;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) div[data-baseweb="select"] svg {{
+            width: 0.9rem !important;
+            height: 0.9rem !important;
+        }}
+
+        .hira-kpi-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.72rem;
+            margin-bottom: 1.15rem;
+        }}
+
+        .hira-kpi-card {{
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 14px;
+            padding: 0.82rem 0.9rem;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.035);
+            min-height: 5.2rem;
+        }}
+
+        .hira-kpi-label {{
+            color: #475569;
+            font-size: 0.78rem;
+            font-weight: 500;
+            line-height: 1.35;
+            margin-bottom: 0.45rem;
+        }}
+
+        .hira-kpi-value {{
+            color: #0F172A;
+            font-size: 1.45rem;
+            font-weight: 620;
+            line-height: 1.2;
+            letter-spacing: -0.045em;
+            word-break: keep-all;
+        }}
+
+        .hira-kpi-note {{
+            display: flex;
+            align-items: flex-start;
+            gap: 0.48rem;
+            color: #7A7F8C;
+            font-size: 0.76rem;
+            font-weight: 400;
+            line-height: 1.48;
+            margin-top: 0.35rem;
+            word-break: keep-all;
+        }}
+
+        .hira-kpi-note-icon {{
+            width: 1.05rem;
+            height: 1.05rem;
+            min-width: 1.05rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.68rem;
+            font-weight: 650;
+            line-height: 1;
+            margin-top: 0.16rem;
+        }}
+
+        .dashboard-note-icon {{
+            width: 1.05rem;
+            height: 1.05rem;
+            min-width: 1.05rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.68rem;
+            font-weight: 650;
+            line-height: 1;
+            margin-top: 0.12rem;
+        }}
+
+        .dashboard-note-line {{
+            display: flex;
+            align-items: flex-start;
+            gap: 0.48rem;
+            color: #7A7F8C;
+            font-size: 0.76rem;
+            font-weight: 400;
+            line-height: 1.48;
+            margin-top: 0.45rem;
+            word-break: keep-all;
+        }}
+
+        .report-ai-note {{
+            margin-top: 0.75rem !important;
+            margin-bottom: 0.65rem !important;
+        }}
+
+        .hira-stat-warning-note {{
+            margin-top: 0.55rem !important;
+            margin-bottom: 0.85rem !important;
+        }}
+
+        .hira-interpret-title-row {{
+            display: flex;
+            align-items: center;
+            gap: 0.48rem;
+            margin-bottom: 0.65rem;
+        }}
+
+        .hira-interpret-title-icon {{
+            width: 1.25rem;
+            height: 1.25rem;
+            min-width: 1.25rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.72rem;
+            font-weight: 700;
+            line-height: 1;
+        }}
+
+        .hira-interpret-title {{
+            color: #0F172A;
+            font-size: 0.98rem;
+            font-weight: 560;
+            letter-spacing: -0.025em;
+        }}
+
+        .hira-interpret-card {{
+            color: #334155;
+            font-size: 0.88rem;
+            font-weight: 400;
+            line-height: 1.68;
+            letter-spacing: -0.012em;
+            word-break: keep-all;
+        }}
+
+        .hira-interpret-card p {{
+            margin: 0 0 0.68rem;
+        }}
+
+        .hira-interpret-card p:last-child {{
+            margin-bottom: 0;
+        }}
+
+        .hira-interpret-card strong {{
+            color: #0F172A;
+            font-weight: 620;
+        }}
+
+        .hira-interpret-lead {{
+            color: #1E293B;
+        }}
+
+        .hira-interpret-final {{
+            color: #475569;
+            background: #F8FAFC;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            padding: 0.72rem 0.85rem;
+            margin-top: 0.2rem !important;
+            margin-bottom: 0.65rem !important;
         }}
 
         .dashboard-side-note-title {{
@@ -2766,10 +3029,10 @@ def apply_global_style():
         }}
 
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child {{
-            background: #60A5FA !important;
-            border: 1px solid #60A5FA !important;
+            background: #7DB3F7 !important;
+            border: 1px solid #7DB3F7 !important;
             color: #FFFFFF !important;
-            box-shadow: 0 6px 14px rgba(96, 165, 250, 0.18) !important;
+            box-shadow: 0 6px 14px rgba(125, 179, 247, 0.18) !important;
         }}
 
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child p,
@@ -2853,6 +3116,41 @@ def apply_global_style():
             color: var(--text);
             font-size: 0.96rem;
             font-weight: 600;
+        }}
+
+        .report-block-header {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.75rem;
+        }}
+
+        .report-block-title {{
+            color: #0F172A;
+            font-size: 0.92rem;
+            font-weight: 650;
+            letter-spacing: -0.025em;
+        }}
+
+        .report-edit-badge {{
+            display: inline-flex;
+            align-items: center;
+            margin-left: 0.45rem;
+            padding: 0.18rem 0.45rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            font-size: 0.7rem;
+            font-weight: 650;
+            line-height: 1;
+        }}
+
+        .report-attached-chart-title {{
+            color: #0F172A;
+            font-size: 0.9rem;
+            font-weight: 620;
+            letter-spacing: -0.025em;
+            margin-bottom: 0.25rem;
         }}
 
         .report-edit-badge {{
@@ -3234,6 +3532,19 @@ def apply_global_style():
             box-shadow: 0 8px 20px rgba(15, 23, 42, 0.035);
         }}
 
+        .report-preview-auto-badge {{
+            display: inline-flex;
+            align-items: center;
+            margin-left: 0.45rem;
+            padding: 0.16rem 0.45rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            font-size: 0.68rem;
+            font-weight: 600;
+            vertical-align: middle;
+        }}
+
         .report-preview-section-title {{
             color: #1E3A8A;
             font-size: 1rem;
@@ -3576,26 +3887,75 @@ def apply_global_style():
             display: none;
         }}
 
+        /* 신규 등록 expander 바깥 기본 박스 제거 */
+        /* 신규 등록 expander 전체 영역 */
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) {{
-            border-radius: 11px;
+            border: none ! important;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.025) ! important;
+            background: rgba(255, 255, 255, 0.34) ! important;
+            border-radius: 10px ! important;
+            padding: 0.1rem !important;
+            margin-bottom: 1rem ! important;
+            overflow: hidden ! important;
         }}
 
+        /* 신규 등록 버튼 본체 */
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary {{
+            height: 2.85rem !important;
+            min-height: 2.85rem !important;
+            padding: 0 1rem !important;
             background: transparent !important;
-            border: 1px solid #CBD5E1 !important;
+            border: 1.6px solid #CBD5E1 !important;
+            border-radius: 8px !important;
+            box-shadow: none !important;
             color: #0F172A !important;
             display: flex !important;
             align-items: center !important;
+            justify-content: space-between !important;
+            font-size: 0.95rem !important;
+            font-weight: 520 !important;
+            letter-spacing: -0.025em !important;
         }}
 
+        /* Streamlit expander 기본 테두리/배경 겹침 방지 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary > div {{
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+        }}
+
+        /* hover 상태 */
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:hover {{
-            background: rgba(255, 255, 255, 0.34) !important;
-            border-color: #CBD5E1 !important;
+            background: rgba(255, 255, 255, 0.38) !important;
+            border-color: #94A3B8 !important;
             color: #0F172A !important;
         }}
 
+        /* 신규 등록 텍스트 */
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary p,
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary span {{
+            color: #0F172A !important;
+            font-size: 0.80rem !important;
+            font-weight: 400 !important;
+            letter-spacing: -0.025em !important;
+        }}
+
+        /* expander 화살표 위치 안정화 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary svg {{
+            color: #0F172A !important;
+        }}
+
+        /* 신규 등록 텍스트 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary p,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary span {{
+            color: #0F172A !important;
+            font-size: 0.85rem !important;
+            font-weight: 400 !important;
+            letter-spacing: -0.025em !important;
+        }}
+
+        /* expander 화살표 위치 안정화 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary svg {{
             color: #0F172A !important;
         }}
 
@@ -3786,10 +4146,16 @@ def apply_global_style():
         }}
 
         textarea:focus,
-        input:focus,
-        div[data-baseweb="select"]:focus-within {{
+        input:focus {{
             border-color: var(--primary) !important;
-            box-shadow: 0 0 0 1px var(--primary) !important;
+            box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.18) !important;
+            outline: none !important;
+        }}
+
+        div[data-baseweb="select"]:focus-within {{
+            border-color: #93C5FD !important;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12) !important;
+            outline: none !important;
         }}
 
         @media (max-width: 1100px) {{
@@ -3852,9 +4218,10 @@ def apply_global_style():
             min-width: 4.2rem !important;
             min-height: 2.25rem !important;
             height: 2.25rem !important;
+            max-height: 2.25rem !important;
             border-radius: 9999px !important;
             padding: 0 1.05rem !important;
-            font-size: 0.92rem !important;
+            font-size: 0.88rem !important;
             font-weight: 520 !important;
             line-height: 1 !important;
             white-space: nowrap !important;
@@ -3865,7 +4232,7 @@ def apply_global_style():
 
         div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child p,
         div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child span {{
-            font-size: 0.92rem !important;
+            font-size: 0.88rem !important;
             font-weight: 520 !important;
             line-height: 1 !important;
             margin: 0 !important;
@@ -3873,38 +4240,53 @@ def apply_global_style():
             width: auto !important;
             text-align: center !important;
         }}
-
+        
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child {{
-            background: #60A5FA !important;
-            border-color: #60A5FA !important;
+            background: #2563EB !important;
+            border-color: #2563EB !important;
             color: #FFFFFF !important;
-            box-shadow: 0 6px 14px rgba(96, 165, 250, 0.18) !important;
+            box-shadow: 0 6px 14px rgba(37, 99, 235, 0.18) !important;
         }}
 
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child p,
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child span {{
             color: #FFFFFF !important;
+            font-size: 0.88rem !important;
+            font-weight: 520 !important;
         }}
 
         div[data-testid="column"]:has(.factor-category-is-unselected) div.stButton > button:first-child {{
             background: #FFFFFF !important;
             border-color: #E5E7EB !important;
             color: #0F172A !important;
+            min-height: 2.25rem !important;
+            height: 2.25rem !important;
+            max-height: 2.25rem !important;
+            font-size: 0.88rem !important;
+            font-weight: 520 !important;
         }}
 
         div[data-testid="column"]:has(.factor-category-is-unselected) div.stButton > button:first-child:hover {{
             background: #EFF6FF !important;
             border-color: #93C5FD !important;
             color: #2563EB !important;
+            min-height: 2.25rem !important;
+            height: 2.25rem !important;
+            max-height: 2.25rem !important;
+            font-size: 0.88rem !important;
+            font-weight: 520 !important;
         }}
 
         button[data-testid="stBaseButton-pills"],
         button[data-testid="stBaseButton-pillsActive"] {{
             border-radius: 9999px !important;
-            min-height: 2.35rem !important;
-            padding: 0 1.12rem !important;
-            font-size: 0.95rem !important;
+            min-height: 2.25rem !important;
+            height: 2.25rem !important;
+            max-height: 2.25rem !important;
+            padding: 0 1.05rem !important;
+            font-size: 0.88rem !important;
             font-weight: 520 !important;
+            line-height: 1 !important;
             box-shadow: none !important;
         }}
 
@@ -3921,10 +4303,10 @@ def apply_global_style():
         }}
 
         button[data-testid="stBaseButton-pillsActive"] {{
-            background: #3B82F6 !important;
-            border: 1px solid #3B82F6 !important;
+            background: #2563EB !important;
+            border: 1px solid #2563EB !important;
             color: #FFFFFF !important;
-            box-shadow: 0 6px 14px rgba(59, 130, 246, 0.22) !important;
+            box-shadow: 0 6px 14px rgba(37, 99, 235, 0.20) !important;
         }}
 
         button[data-testid="stBaseButton-pillsActive"] p,
@@ -4204,10 +4586,36 @@ def apply_global_style():
         div[data-testid="column"]:has(.chatbot-nav-button-marker) {{
             display: flex !important;
             justify-content: flex-end !important;
+            align-items: flex-start !important;
+            padding-right: 0 !important;
+        }}
+
+        .st-key-dashboard_chatbot_fab,
+        .st-key-session_detail_chatbot_button {{
+            width: 100% !important;
+            display: flex !important;
+            justify-content: flex-end !important;
         }}
 
         .st-key-dashboard_chatbot_fab {{
-            transform: translateY(-1.35rem) !important;
+            transform: translateY(-0.65rem) !important;
+        }}
+
+        .st-key-session_detail_chatbot_button {{
+            transform: translateY(0rem) !important;
+        }}
+
+        .st-key-dashboard_chatbot_fab div.stButton,
+        .st-key-session_detail_chatbot_button div.stButton {{
+            width: auto !important;
+            display: flex !important;
+            justify-content: flex-end !important;
+        }}
+
+        .st-key-dashboard_chatbot_fab div.stButton {{
+            width: auto !important;
+            display: flex !important;
+            justify-content: flex-end !important;
         }}
 
         div[data-testid="column"]:has(.chatbot-nav-button-marker) div.stButton > button:first-child,
@@ -4652,6 +5060,161 @@ def apply_global_style():
             text-align: left !important;
     }}
 
+        /* Streamlit 버튼 hover/focus/active 주황색 제거 */
+        div[data-testid="stButton"] > button,
+        div[data-testid="stDownloadButton"] > button {{
+            border-color: #CBD5E1 !important;
+            color: #0F172A !important;
+            box-shadow: none !important;
+        }}
+
+        div[data-testid="stButton"] > button:hover,
+        div[data-testid="stDownloadButton"] > button:hover {{
+            border-color: #93C5FD !important;
+            color: #2563EB !important;
+            background: #F8FBFF !important;
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.08) !important;
+        }}
+
+        div[data-testid="stButton"] > button:focus,
+        div[data-testid="stButton"] > button:focus-visible,
+        div[data-testid="stDownloadButton"] > button:focus,
+        div[data-testid="stDownloadButton"] > button:focus-visible {{
+            border-color: #3B82F6 !important;
+            color: #2563EB !important;
+            background: #F8FBFF !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16) !important;
+            outline: none !important;
+        }}
+
+        div[data-testid="stButton"] > button:active,
+        div[data-testid="stDownloadButton"] > button:active {{
+            border-color: #2563EB !important;
+            color: #1D4ED8 !important;
+            background: #EFF6FF !important;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14) !important;
+        }}
+
+        div[data-testid="stButton"] > button:focus:not(:focus-visible),
+        div[data-testid="stDownloadButton"] > button:focus:not(:focus-visible) {{
+            outline: none !important;
+        }}
+
+        /* =====================================================
+           Streamlit 기본 주황/빨강 focus 색상 제거 → 파란 계열 통일
+        ===================================================== */
+
+        /* 1) 검색 input focus 테두리 */
+        section[data-testid="stSidebar"] div[data-baseweb="input"] {{
+            border-color: #E2E8F0 !important;
+            box-shadow: none !important;
+        }}
+
+        section[data-testid="stSidebar"] div[data-baseweb="input"]:focus-within {{
+            border-color: #93C5FD !important;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.16) !important;
+            outline: none !important;
+        }}
+
+        section[data-testid="stSidebar"] input:focus,
+        section[data-testid="stSidebar"] input:focus-visible {{
+            outline: none !important;
+            box-shadow: none !important;
+            border-color: transparent !important;
+        }}
+
+
+        /* 2) 신규 등록 expander hover/focus/active 색상 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:hover,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:focus,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:focus-visible,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:active {{
+            background: #F8FBFF !important;
+            border-color: #93C5FD !important;
+            color: #0F172A !important;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14) !important;
+            outline: none !important;
+        }}
+
+
+
+        /* 3) 일반 버튼 / 다운로드 버튼 focus-visible 주황색 제거 */
+        div[data-testid="stButton"] > button:hover,
+        div[data-testid="stDownloadButton"] > button:hover {{
+            border-color: #93C5FD !important;
+            color: #2563EB !important;
+            background: #F8FBFF !important;
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.08) !important;
+            outline: none !important;
+        }}
+
+        div[data-testid="stButton"] > button:focus,
+        div[data-testid="stButton"] > button:focus-visible,
+        div[data-testid="stButton"] > button:active,
+        div[data-testid="stDownloadButton"] > button:focus,
+        div[data-testid="stDownloadButton"] > button:focus-visible,
+        div[data-testid="stDownloadButton"] > button:active {{
+            border-color: #3B82F6 !important;
+            color: #2563EB !important;
+            background: #F8FBFF !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16) !important;
+            outline: none !important;
+        }}
+
+        /* 4) Streamlit 기본 focus outline 사각형 제거 */
+        button:focus,
+        button:focus-visible,
+        input:focus,
+        input:focus-visible,
+        summary:focus,
+        summary:focus-visible,
+        div[data-baseweb="select"]:focus,
+        div[data-baseweb="select"]:focus-visible,
+        div[data-baseweb="select"]:focus-within {{
+            outline: none !important;
+        }}
+
+        /* selectbox 내부 input 때문에 생기는 파란 사각형 제거 */
+        div[data-baseweb="select"] input,
+        div[data-baseweb="select"] input:focus,
+        div[data-baseweb="select"] input:focus-visible {{
+            outline: none !important;
+            box-shadow: none !important;
+            border: none !important;
+        }}
+
+        /* 신규 등록 expander 클릭 시 화살표 주변 focus 사각형 제거 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:focus,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:focus-visible,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:active {{
+            outline: none !important;
+        }}
+
+
+
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary [data-testid],
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary [data-testid]:focus,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary [data-testid]:focus-visible,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary [data-testid]:active {{
+            outline: none !important;
+            box-shadow: none !important;
+            border: none !important;
+            background: transparent !important;
+        }}
+
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button:hover,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button:focus,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button:focus-visible,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button:active {{
+            outline: none !important;
+            box-shadow: none !important;
+            border: none !important;
+            background: transparent !important;
+            color: #0F172A !important;
+        }}
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -4666,7 +5229,7 @@ def render_sidebar():
         st.markdown(
             """
             <div class="sidebar-brand">CounsHelper</div>
-            <div class="sidebar-subtitle">상담 분석·보고서 자동화</div>
+            <div class="sidebar-subtitle">심리상담사 AI 보조 플랫폼</div>
             """,
             unsafe_allow_html=True,
         )
@@ -4829,7 +5392,7 @@ def render_sidebar():
                 go_page(page_name)
                 st.rerun()
 
-        st.markdown("<div style='height: 3.8rem;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height: 4.0rem;'></div>", unsafe_allow_html=True)
 
         profile_icon_data_uri = get_png_data_uri(PROFILE_ICON_PATH)        
         st.markdown(
@@ -4839,7 +5402,7 @@ def render_sidebar():
                     <img src="{profile_icon_data_uri}" alt="profile" />
                 </div>
                 <div class="sidebar-user-info">
-                    <div class="sidebar-user-name">상담심리사</div>
+                    <div class="sidebar-user-name">오은영의 데이터 상담소</div>
                     <div class="sidebar-user-role">MVP Demo</div>
                 </div>
             </div>
@@ -5372,14 +5935,13 @@ def render_session_detail():
     journal_id = _get_journal_id(client_id, session_name, session_row)
     counseling_type = str(client_row.get("상담 유형", "상담"))
 
-    title_col, list_col, dashboard_col, chatbot_col = st.columns(
-        [0.58, 0.13, 0.17, 0.06],
+    title_col, spacer_col, list_col, dashboard_col, chatbot_col = st.columns(
+        [0.50, 0.14, 0.13, 0.17, 0.06],
         vertical_alignment="center",
     )
 
     with title_col:
         st.markdown('<div class="patient-title">상담일지 열람</div>', unsafe_allow_html=True)
-  
 
     with list_col:
         st.markdown('<span class="session-detail-list-button-marker"></span>', unsafe_allow_html=True)
@@ -5403,12 +5965,12 @@ def render_session_detail():
         if st.button(
             chatbot_icon_label,
             key="session_detail_chatbot_button",
-            use_container_width=True,
+            use_container_width=False,
             help="챗봇으로 이동",
         ):
             go_page("챗봇")
             st.rerun()
-
+            
     st.markdown(
         f"""
         <div class="session-detail-header">
@@ -6052,7 +6614,7 @@ def render_top_risk_cards(classification: Dict[str, int], factors: Dict[str, int
 """
 
     st.markdown(
-        f"""<div class="home-summary-grid">
+        f"""<div class="home-summary-grid" style="margin-top:0.55rem;">
 {cards_html}
 </div>""",
         unsafe_allow_html=True,
@@ -6246,10 +6808,13 @@ def render_hira_report_sentence_card(
         include_negative=include_negative,
     )
 
-    st.markdown("### 증상별 입내원정보")
-    st.caption(
-        "건강보험심사평가원_시군구별 성별 연령별 주요 정신질환 통계 2024 기준입니다. "
-        "기본적으로 KlueBERT 양성 항목만 표시합니다."
+    st.markdown(
+        '<div class="chart-panel-title">증상별 입내원정보</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="chart-panel-desc">건강보험심사평가원_시군구별 성별 연령별 주요 정신질환 통계 2024 기준입니다. 기본적으로 KlueBERT 양성 항목만 표시합니다.</div>',
+        unsafe_allow_html=True,
     )
 
     if summary_df.empty:
@@ -6281,13 +6846,29 @@ def render_hira_report_sentence_card(
         theme = get_context_theme(context_key)
 
         if is_positive:
-            bg = f"linear-gradient(180deg, {theme['soft_bg']} 0%, #FFFFFF 100%)"
-            border = theme["border"]
-            title_color = theme["accent_dark"]
-            value_color = theme["accent_dark"]
+            if context_key == "depression":
+                bg = "linear-gradient(180deg, #F7FAFF 0%, #FFFFFF 100%)"
+                border = "#BFD0FF"
+                title_color = "#2F4ED8"
+                value_color = "#2F4ED8"
+            elif context_key == "anxiety":
+                bg = "linear-gradient(180deg, #FBF8FF 0%, #FFFFFF 100%)"
+                border = "#E3D6FF"
+                title_color = "#7B57D1"
+                value_color = "#7B57D1"
+            elif context_key == "addiction":
+                bg = "linear-gradient(180deg, #F7FDFF 0%, #FFFFFF 100%)"
+                border = "#C8F2F7"
+                title_color = "#1989A3"
+                value_color = "#1989A3"
+            else:
+                bg = "linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%)"
+                border = "#D8E2EF"
+                title_color = "#475569"
+                value_color = "#334155"
         else:
-            bg = "linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%)"
-            border = "#CBD5E1"
+            bg = "linear-gradient(180deg, #FAFBFD 0%, #FFFFFF 100%)"
+            border = "#D8E2EF"
             title_color = "#475569"
             value_color = "#334155"
 
@@ -6298,14 +6879,14 @@ def render_hira_report_sentence_card(
                     background:{bg};
                     border:1px solid {border};
                     border-radius:1.15rem;
-                    padding:1rem 1.05rem;
-                    min-height:260px;
+                    padding:0.95rem 1rem;
+                    min-height:245px;
                     box-shadow:0 8px 20px rgba(15,23,42,0.05);
                 ">
-                    <div style="font-size:0.78rem; font-weight:700; color:{title_color}; margin-bottom:0.35rem;">
+                    <div style="font-size:0.78rem; font-weight:560; color:{title_color}; margin-bottom:0.35rem;">
                         {row.get("판별상태", "")} 항목
                     </div>
-                    <div style="font-size:1.08rem; font-weight:780; color:#0F172A; margin-bottom:0.25rem;">
+                    <div style="font-size:1.00rem; font-weight:650; color:#0F172A; margin-bottom:0.25rem;">
                         {row.get("disease", "질환명 없음")}
                     </div>
                     <div style="font-size:0.8rem; color:#64748B; margin-bottom:0.9rem;">
@@ -6313,22 +6894,22 @@ def render_hira_report_sentence_card(
                     </div>
                     <div style="border-top:1px solid {border}; padding-top:0.75rem;">
                         <div style="font-size:0.76rem; color:#64748B;">환자수</div>
-                        <div style="font-size:1.5rem; font-weight:800; color:{value_color};">
+                        <div style="font-size:1.3rem; font-weight:700; color:{value_color};">
                             {format_number(patients, "명")}
                         </div>
                         <div style="height:0.65rem;"></div>
                         <div style="font-size:0.76rem; color:#64748B;">입내원일수</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:{value_color};">
+                        <div style="font-size:1.05rem; font-weight:650; color:{value_color};">
                             {format_number(visit_days, "일")}
                         </div>
                         <div style="height:0.65rem;"></div>
                         <div style="font-size:0.76rem; color:#64748B;">1인당 평균 입내원일수</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:{value_color};">
+                        <div style="font-size:1.05rem; font-weight:650; color:{value_color};">
                             {format_float(visit_days_per_patient, "일")}
                         </div>
                         <div style="height:0.65rem;"></div>
                         <div style="font-size:0.76rem; color:#64748B;">1인당 평균 요양급여비용</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:{value_color};">
+                        <div style="font-size:1.05rem; font-weight:650; color:{value_color};">
                             {format_money(cost_per_patient)}
                         </div>
                     </div>
@@ -6337,9 +6918,16 @@ def render_hira_report_sentence_card(
                 unsafe_allow_html=True,
             )
 
-    st.caption(
-        "주의: 위 통계는 요양기관 소재지 기준의 공공 진료 통계이며, "
-        "개별 내담자의 진단, 중증도, 위험도 판단 근거로 사용하지 않습니다."
+    st.markdown(
+        """
+        <div class="dashboard-note-line hira-stat-warning-note">
+            <span class="dashboard-note-icon">i</span>
+            <span>
+                주의: 위 통계는 요양기관 소재지 기준의 공공 진료 통계이며, 개별 내담자의 진단, 중증도, 위험도 판단 근거로 사용하지 않습니다.
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 def render_same_group_disease_chart(
@@ -6351,8 +6939,14 @@ def render_same_group_disease_chart(
     현재 선택된 내담자와 같은 성별·연령대의 주요 정신질환 환자수를 비교한다.
     """
 
-    st.markdown("#### 같은 성별·연령대 주요 정신질환 진료 현황")
-    st.caption("내담자와 같은 성별·연령대의 주요 정신질환 진료 환자수를 비교합니다.")
+    st.markdown(
+        '<div class="chart-panel-title">같은 성별·연령대 주요 정신질환 진료 현황</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="chart-panel-desc">내담자와 같은 성별·연령대의 주요 정신질환 진료 환자수를 비교합니다.</div>',
+        unsafe_allow_html=True,
+    )
 
     hira_df = load_hira_model_context().copy()
     client_row = get_client_row()
@@ -6427,24 +7021,57 @@ def render_same_group_disease_chart(
         x="disease",
         y="patients",
         text="patients",
-        height=340,
+        height=370,
+        color_discrete_sequence=["#6B8EF7"],
     )
 
     fig.update_traces(
         texttemplate="%{text:,}",
         textposition="outside",
         marker_line_width=0,
+        width=0.58,
+        textfont=dict(
+            size=11,
+            color="#64748B",
+            family='-apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", sans-serif',
+        ),
+        cliponaxis=False,
     )
 
     fig.update_layout(
+        margin=dict(l=18, r=18, t=24, b=28),
         xaxis_title="질환",
         yaxis_title="환자수",
-        margin=dict(l=10, r=10, t=20, b=10),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
+        bargap=0.34,
+        showlegend=False,
+        plot_bgcolor="#FFFFFF",
+        paper_bgcolor="#FFFFFF",
+        font=dict(
+            color="#64748B",
+            size=11,
+            family='-apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", sans-serif',
+        ),
+        xaxis=dict(
+            tickfont=dict(size=11, color="#64748B"),
+            title_font=dict(size=12, color="#64748B"),
+            showgrid=False,
+            zeroline=False,
+            linecolor="#E2E8F0",
+        ),
+        yaxis=dict(
+            tickfont=dict(size=11, color="#64748B"),
+            title_font=dict(size=12, color="#64748B"),
+            showgrid=True,
+            gridcolor="#E5EAF2",
+            zeroline=False,
+        ),
     )
 
-    st.plotly_chart(fig, use_container_width=True, key="same_group_disease_chart_restored")
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="same_group_disease_chart",
+    )
 
     st.caption(
         f"현재 비교 기준: {age_group} {gender}. "
@@ -6517,6 +7144,32 @@ def _filter_hira_by_context(context_key: str) -> pd.DataFrame:
     return hira_df[hira_df["disease"].str.contains(pattern, na=False)].copy()
 
 
+def format_compact_korean_number(value: Any, suffix: str = "") -> str:
+    numeric_value = pd.to_numeric(value, errors="coerce")
+
+    if pd.isna(numeric_value):
+        numeric_value = 0
+
+    numeric_value = float(numeric_value)
+
+    if abs(numeric_value) >= 10000:
+        unit = f"만{suffix}" if suffix else "만"
+        return f"{numeric_value / 10000:.1f}{unit}"
+
+    if suffix == "원":
+        return f"{numeric_value:,.0f}원"
+
+    if suffix in ["명", "일"]:
+        if float(numeric_value).is_integer():
+            return f"{numeric_value:,.0f}{suffix}"
+        return f"{numeric_value:,.2f}{suffix}"
+
+    if suffix:
+        return f"{numeric_value:,.2f}{suffix}"
+
+    return f"{numeric_value:,.0f}"
+
+
 def render_hira_donut_chart(
     df: pd.DataFrame,
     names_col: str,
@@ -6578,7 +7231,7 @@ def render_hira_donut_chart(
 
     # 선택 조각은 과하게 튀지 않도록 연한 반투명 민트 테두리로 강조
     line_colors = [
-        "rgba(153, 205, 216, 0.58)" if highlight_text != "전체" and str(label) == highlight_text else "rgba(255, 255, 255, 0.92)"
+        "rgba(37, 99, 235, 0.38)" if highlight_text != "전체" and str(label) == highlight_text else "rgba(255, 255, 255, 0.95)"
         for label in labels
     ]
 
@@ -6586,8 +7239,8 @@ def render_hira_donut_chart(
         chart_df,
         names=names_col,
         values=values_col,
-        hole=0.62,
-        height=335,
+        hole=0.66,
+        height=300,
         color_discrete_sequence=DONUT_PALETTE,
     )
 
@@ -6595,7 +7248,7 @@ def render_hira_donut_chart(
         name="",
         textposition="inside",
         texttemplate="%{percent}",
-        textfont=dict(size=10, color="#0F172A"),
+        textfont=dict(size=9, color="#334155"),
         pull=pull_values,
         marker=dict(
             line=dict(
@@ -6609,7 +7262,7 @@ def render_hira_donut_chart(
     fig.update_layout(
         title=None,
         title_text="",
-        margin=dict(l=0, r=0, t=0, b=76),
+        margin=dict(l=0, r=0, t=0, b=66),
         showlegend=True,
         legend_title_text="",
         legend=dict(
@@ -6618,7 +7271,7 @@ def render_hira_donut_chart(
             y=-0.12,
             xanchor="center",
             x=0.5,
-            font=dict(size=9),
+            font=dict(size=9, color="#475569"),
             itemwidth=38,
         ),
         paper_bgcolor="white",
@@ -6627,11 +7280,11 @@ def render_hira_donut_chart(
 
     if show_top_note and top_n is not None:
         st.markdown(
-            f"**{title}** <span style='font-size:0.74rem; color:#64748B; font-weight:600;'>(Top {min(top_n, len(chart_df))})</span>",
+            f"<div class='hira-donut-title'>{html_escape(title)} <span>(Top {min(top_n, len(chart_df))})</span></div>",
             unsafe_allow_html=True,
         )
     else:
-        st.markdown(f"**{title}**")
+        st.markdown(f"<div class='hira-donut-title'>{html_escape(title)}</div>", unsafe_allow_html=True)
         
     st.plotly_chart(fig, use_container_width=True, key=key)
 
@@ -6716,58 +7369,70 @@ def render_hira_context_detail_section(
         st.info(f"{label} 관련 HIRA 데이터를 찾지 못했습니다.")
         return
         
-    st.markdown(f"### [{label}] 관련 공공통계 상세")
-    st.caption(
-        f"{label} 관련 질환의 HIRA 2024 분포와 현재 상담 기록의 28요인 구성을 함께 확인합니다."
+    # 지역은 환자수 기준 Top10 안에서 선택
+    sido_top10 = (
+        context_df.groupby("sido", as_index=False)["patients"]
+        .sum()
+        .sort_values("patients", ascending=False)
+        .head(10)["sido"]
+        .astype(str)
+        .tolist()
     )
-    
-    client_gender, client_age_group = _get_client_hira_filter_values()
-    # =====================================================
-    # 1행: 필터는 '하이라이트 선택' 용도
-    # =====================================================
-    d1, d2, d3, filter_col = st.columns([0.24, 0.24, 0.24, 0.28], gap="medium")
 
-    with filter_col:
-        st.markdown("**하이라이트 필터**")
+    sido_options = ["전체"] + sido_top10
 
-        # 지역은 환자수 기준 Top10 안에서 선택
-        sido_top10 = (
-            context_df.groupby("sido", as_index=False)["patients"]
-            .sum()
-            .sort_values("patients", ascending=False)
-            .head(10)["sido"]
-            .astype(str)
-            .tolist()
+    # 연령대는 환자수 기준 Top6 안에서 선택
+    age_top6 = (
+        context_df.groupby("age_group", as_index=False)["patients"]
+        .sum()
+        .sort_values("patients", ascending=False)
+        .head(6)["age_group"]
+        .astype(str)
+        .tolist()
+    )
+
+    age_options = ["전체"] + age_top6
+
+    title_col, filter_sido_col, filter_age_col = st.columns(
+        [0.70, 0.15, 0.15],
+        gap="small",
+        vertical_alignment="bottom",
+    )
+
+    with title_col:
+        st.markdown(
+            f"<div class='hira-detail-title'>{html_escape(label)} 관련 공공통계 상세 정보</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<div class='hira-detail-desc'>{html_escape(label)} 관련 질환의 HIRA 2024 분포와 현재 상담 기록의 28요인 구성을 함께 확인합니다.</div>",
+            unsafe_allow_html=True,
         )
 
-        sido_options = ["전체"] + sido_top10
-
+    with filter_sido_col:
+        st.markdown('<span class="hira-highlight-filter-marker"></span>', unsafe_allow_html=True)
         selected_sido = st.selectbox(
             "지역",
             options=sido_options,
             key=f"{context_key}_detail_sido_highlight",
         )
 
-        # 연령대는 환자수 기준 Top6 안에서 선택
-        age_top6 = (
-            context_df.groupby("age_group", as_index=False)["patients"]
-            .sum()
-            .sort_values("patients", ascending=False)
-            .head(6)["age_group"]
-            .astype(str)
-            .tolist()
-        )
-
-        age_options = ["전체"] + age_top6
-
+    with filter_age_col:
+        st.markdown('<span class="hira-highlight-filter-marker"></span>', unsafe_allow_html=True)
         selected_age = st.selectbox(
             "연령",
             options=age_options,
             key=f"{context_key}_detail_age_highlight",
         )
 
-        client_gender, client_age_group = _get_client_hira_filter_values()
+    client_gender, client_age_group = _get_client_hira_filter_values()
 
+    st.markdown("<div style='height:0.15rem;'></div>", unsafe_allow_html=True)
+
+    # =====================================================
+    # 2행: 도넛 차트 3개를 전체 폭 기준으로 균등 배치
+    # =====================================================
+    d1, d2, d3 = st.columns(3, gap="medium")
 
     with d1:
         render_hira_donut_chart(
@@ -6810,11 +7475,11 @@ def render_hira_context_detail_section(
     # =====================================================
     # 2행: 28요인 트리맵 + 공공통계
     # =====================================================
-    tree_col, stat_col = st.columns([0.55, 0.45], gap="large")
+    tree_col, stat_col = st.columns([0.57, 0.43], gap="medium")
 
     with tree_col:
         with st.container(border=True):
-            st.markdown(f"#### {label} 관련 28요인 구성")
+            st.markdown(f"<div class='chart-panel-title'>{html_escape(label)} 관련 28요인 구성</div>", unsafe_allow_html=True)
             st.caption("현재 상담 기록에서 추출된 28요인 점수를 기준으로 표시합니다.")
 
             tree_df = build_context_factor_treemap_df(
@@ -6826,6 +7491,35 @@ def render_hira_context_detail_section(
                 st.info(f"현재 상담 기록에서 0점보다 큰 {label} 관련 28요인이 없습니다.")
             else:
                 theme = get_context_theme(context_key)
+                treemap_palette = {
+                    "depression": {
+                        "root": "#EFF6FF",
+                        "category": "#DBEAFE",
+                        "leaf": {
+                            1: "#EAF2FF",
+                            2: "#BFDBFE",
+                            3: "#93C5FD",
+                        },
+                    },
+                    "anxiety": {
+                        "root": "#F5F3FF",
+                        "category": "#EDE9FE",
+                        "leaf": {
+                            1: "#F5F3FF",
+                            2: "#DDD6FE",
+                            3: "#C4B5FD",
+                        },
+                    },
+                    "addiction": {
+                        "root": "#ECFEFF",
+                        "category": "#CCFBF1",
+                        "leaf": {
+                            1: "#ECFEFF",
+                            2: "#99F6E4",
+                            3: "#5EEAD4",
+                        },
+                    },
+                }.get(context_key, {})
 
                 root_label = _get_context_label(context_key)
 
@@ -6833,15 +7527,18 @@ def render_hira_context_detail_section(
                 ids = [root_label]
                 parents = [""]
                 values = [int(tree_df["값"].sum())]
-                colors = [theme["soft_bg"]]
+                colors = [treemap_palette.get("root", theme["soft_bg"])]
 
-                category_color = "#DCE6F6"
+                category_color = treemap_palette.get("category", "#E2E8F0")
 
-                leaf_color_map = {
-                    1: "#DCE6F6",
-                    2: theme["accent"],
-                    3: theme["accent_dark"],
-                }
+                leaf_color_map = treemap_palette.get(
+                    "leaf",
+                    {
+                        1: "#F1F5F9",
+                        2: "#CBD5E1",
+                        3: "#94A3B8",
+                    },
+                )
 
                 for category_name, category_df in tree_df.groupby("카테고리"):
                     category_id = f"{root_label}/{category_name}"
@@ -6872,10 +7569,10 @@ def render_hira_context_detail_section(
                         branchvalues="total",
                         marker=dict(
                             colors=colors,
-                            line=dict(color="white", width=3),
+                            line=dict(color="rgba(255,255,255,0.96)", width=2),
                         ),
-                        texttemplate="<b>%{label}</b><br>%{value}점",
-                        textfont=dict(size=16, color="#0F172A"),
+                        texttemplate="%{label}<br>%{value}점",
+                        textfont=dict(size=13, color="#0F172A"),
                         hovertemplate="<b>%{label}</b><br>점수: %{value}점<extra></extra>",
                         tiling=dict(pad=4),
                         pathbar=dict(visible=False),
@@ -6883,11 +7580,11 @@ def render_hira_context_detail_section(
                 )
 
                 fig_tree.update_layout(
-                    height=390,
+                    height=355,
                     margin=dict(l=6, r=6, t=8, b=8),
                     paper_bgcolor="white",
                     plot_bgcolor="white",
-                    uniformtext_minsize=14,
+                    uniformtext_minsize=11,
                     uniformtext_mode="hide",
                 )
 
@@ -6899,7 +7596,7 @@ def render_hira_context_detail_section(
 
     with stat_col:
         with st.container(border=True):
-            st.markdown("#### 공공통계")
+            st.markdown("<div class='chart-panel-title'>공공통계</div>", unsafe_allow_html=True)
 
             total_patients = context_df["patients"].sum() if "patients" in context_df.columns else 0
             total_visit_days = context_df["visit_days"].sum() if "visit_days" in context_df.columns else 0
@@ -6914,24 +7611,52 @@ def render_hira_context_detail_section(
             else:
                 avg_cost = 0
 
-            c1, c2 = st.columns(2)
-            c1.metric("환자수", f"{total_patients:,.0f}명")
-            c2.metric("입내원일수", f"{total_visit_days:,.0f}일")
+            kpi_items = [
+                ("환자수", format_compact_korean_number(total_patients, "명")),
+                ("입내원일수", format_compact_korean_number(total_visit_days, "일")),
+                ("1인당 입내원일수", format_compact_korean_number(avg_visit_days, "일")),
+                ("1인당 요양급여비용", format_compact_korean_number(avg_cost, "원")),
+            ]
 
-            c3, c4 = st.columns(2)
-            c3.metric("1인당 입내원일수", f"{avg_visit_days:,.2f}일")
-            c4.metric("1인당 요양급여비용", f"{avg_cost:,.0f}원")
-
-            st.caption(
-                "위 공공통계는 현재 선택된 내담자의 성별·연령대 조건을 반영한 HIRA 2024 기준 합계입니다. "
-                "지역·연령대 선택은 도넛 차트의 하이라이트 용도이며, 개별 내담자의 진단·중증도·위험도 판단 근거가 아닙니다."
+            kpi_html = "".join(
+                (
+                    '<div class="hira-kpi-card">'
+                    f'<div class="hira-kpi-label">{html_escape(label_text)}</div>'
+                    f'<div class="hira-kpi-value">{html_escape(value_text)}</div>'
+                    "</div>"
+                )
+                for label_text, value_text in kpi_items
             )
+            st.markdown(f"<div class='hira-kpi-grid'>{kpi_html}</div>", unsafe_allow_html=True)
+
+            st.markdown(
+                """
+                <div class="hira-kpi-note">
+                    <span class="hira-kpi-note-icon">i</span>
+                    <span>
+                        위 공공통계는 현재 선택된 내담자의 성별·연령대 조건을 반영한 HIRA 2024 기준 합계입니다.
+                        지역·연령대 선택은 도넛 차트의 하이라이트 용도이며, 개별 내담자의 진단·중증도·위험도 판단 근거가 아닙니다.
+                    </span>
+                </div>
+                <div style="height:0.65rem;"></div>
+                """,
+                unsafe_allow_html=True,
+            )
+
 
     # =====================================================
     # 3행: 상담자 해석 도우미
     # =====================================================
     with st.container(border=True):
-        st.markdown("#### 상담자 해석 도우미")
+        st.markdown(
+            """
+            <div class="hira-interpret-title-row">
+                <span class="hira-interpret-title-icon">i</span>
+                <span class="hira-interpret-title">상담자 해석 도우미</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         highlight_parts = []
 
@@ -6941,24 +7666,33 @@ def render_hira_context_detail_section(
         if selected_age != "전체":
             highlight_parts.append(f"{selected_age}")
 
-
         if highlight_parts:
             highlight_text = " · ".join(highlight_parts)
         else:
             highlight_text = "전체 분포"
 
         st.markdown(
-            f"""
-            현재 KlueBERT 판별에서 **{label} 관련 항목이 양성**으로 표시되었습니다.
+            f"""<div class="hira-interpret-card">
+<p class="hira-interpret-lead">
+현재 KlueBERT 판별에서 <strong>{html_escape(label)} 관련 항목이 양성</strong>으로 표시되었습니다.
+</p>
 
-            왼쪽 도넛차트에서는 **{highlight_text}**가 강조되어 있습니다.  
-            이 강조 기능은 상담자가 HIRA 공공통계에서 특정 지역·연령대의 상대적 위치를 빠르게 확인하기 위한 시각적 보조 기능입니다.
+<p>
+도넛차트에서는 <strong>{html_escape(highlight_text)}</strong>가 강조되어 있습니다.
+이 강조 기능은 상담자가 HIRA 공공통계에서 특정 지역·연령대의 상대적 위치를 빠르게 확인하기 위한 시각적 보조 기능입니다.
+</p>
 
-            가운데 트리맵은 HIRA 질환 구성이 아니라, **현재 상담 기록에서 추출된 {label} 관련 28요인 점수 구성**입니다.  
-            따라서 공공통계는 인구통계적 참고자료로, 28요인 트리맵은 현재 상담 발화의 내용 기반 참고자료로 분리해서 해석해야 합니다.
+<p>
+트리맵은 HIRA 질환 구성이 아니라,
+<strong>현재 상담 기록에서 추출된 {html_escape(label)} 관련 28요인 점수 구성</strong>입니다.
+따라서 공공통계는 인구통계적 참고자료로, 28요인 트리맵은 현재 상담 발화의 내용 기반 참고자료로 분리해서 해석해야 합니다.
+</p>
 
-            최종 판단은 상담자가 실제 발화 맥락, 증상 지속 기간, 기능 저하 정도, 보호요인, 위험요인을 함께 검토해 수행해야 합니다.
-            """
+<p class="hira-interpret-final">
+최종 판단은 상담자가 실제 발화 맥락, 증상 지속 기간, 기능 저하 정도, 보호요인, 위험요인을 함께 검토해 수행해야 합니다.
+</p>
+</div>""",
+            unsafe_allow_html=True,
         )
 
 def render_depression_dashboard_section(classification, factors, key_prefix="depression"):
@@ -7536,7 +8270,10 @@ def render_ai_summary_cards(factors: Dict[str, int]):
 {cards_html}
 </div>
 <div class="ai-summary-footnote">
-    위 요약은 AI 분석 결과의 보조 참고 자료이며, 최종 판단과 상담 방향은 상담사의 전문적 판단을 우선합니다.
+    <span class="dashboard-note-icon">i</span>
+    <span>
+        위 요약은 AI 분석 결과의 보조 참고 자료이며, 최종 판단과 상담 방향은 상담사의 전문적 판단을 우선합니다.
+    </span>
 </div>
 </div>""",
         unsafe_allow_html=True,
@@ -7647,7 +8384,7 @@ def render_all_factor_expander(factor_df: pd.DataFrame):
         st.plotly_chart(fig_all_factor, use_container_width=True, key="all_factor_28_chart")
 
 def render_dashboard():
-    title_col, chat_col = st.columns([0.88, 0.12], vertical_alignment="top")
+    title_col, chat_col = st.columns([0.94, 0.06], vertical_alignment="top")
 
     with title_col:
         st.markdown('<div class="patient-title dashboard-title">분석 대시보드</div>', unsafe_allow_html=True)
@@ -7663,7 +8400,7 @@ def render_dashboard():
         if st.button(
             chatbot_button_label,
             key="dashboard_chatbot_fab",
-            use_container_width=True,
+            use_container_width=False,
             help="챗봇으로 이동",
         ):
             go_page("챗봇")
@@ -7712,7 +8449,7 @@ def render_dashboard():
     st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
     render_top_risk_cards(classification, factors)
 
-    st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:0.35rem;"></div>', unsafe_allow_html=True)
     render_ai_summary_cards(factors)
 
     st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
@@ -7736,7 +8473,7 @@ def render_dashboard():
         render_all_factor_expander(factor_df)
 
     st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
-    hira_left_col, hira_right_col = st.columns([1, 1], gap="large")
+    hira_left_col, hira_right_col = st.columns([0.44, 0.56], gap="medium")
 
     with hira_left_col:
         with st.container(border=True):
@@ -7857,24 +8594,24 @@ def render_report():
             color="카테고리",
             orientation="h",
             range_x=[0, 3],
-            height=330,
+            height=260,
             color_discrete_map={
-                "우울/증상": "#4F6EF7",
-                "불안": "#A176F2",
-                "중독": "#36B9D6",
-                "상담사 개입": "#FF9DB5",
-                "변화/기타": "#B8C4D6",
+                "우울/증상": "#7E9FE6",
+                "불안": "#A991E6",
+                "중독": "#8ECAD8",
+                "상담사 개입": "#F3A8BE",
+                "변화/기타": "#CBD5E1",
             },
         )
 
         fig.update_layout(
-            margin=dict(l=10, r=10, t=20, b=20),
+            margin=dict(l=6, r=6, t=8, b=10),
             xaxis_title="점수",
             yaxis_title="",
             legend_title_text="",
             paper_bgcolor="white",
             plot_bgcolor="white",
-            font=dict(color="#334155", size=12),
+            font=dict(color="#475569", size=10),
         )
         fig.update_xaxes(showgrid=True, gridcolor="#E2E8F0", zeroline=False)
         fig.update_yaxes(showgrid=False, zeroline=False)
@@ -7896,23 +8633,23 @@ def render_report():
             y="값",
             text="값",
             range_y=[0, 1.1],
-            height=300,
+            height=230,
             color="항목",
             color_discrete_map={
-                "우울": "#4F6EF7",
-                "불안": "#A176F2",
-                "중독": "#36B9D6",
+                "우울": "#7E9FE6",
+                "불안": "#A991E6",
+                "중독": "#8ECAD8",
             },
         )
         fig.update_traces(textposition="outside")
         fig.update_layout(
-            margin=dict(l=10, r=10, t=20, b=20),
+            margin=dict(l=6, r=6, t=8, b=10),
             xaxis_title="",
             yaxis_title="KlueBERT 판별값",
             showlegend=False,
             paper_bgcolor="white",
             plot_bgcolor="white",
-            font=dict(color="#334155", size=12),
+            font=dict(color="#475569", size=10),
         )
         fig.update_xaxes(showgrid=False)
         fig.update_yaxes(showgrid=True, gridcolor="#E2E8F0", zeroline=False)
@@ -7940,57 +8677,154 @@ def render_report():
             y="disease",
             orientation="h",
             text="patients",
-            height=330,
+            height=230,
             color="질환군",
             color_discrete_map={
-                "우울": "#4F6EF7",
-                "불안": "#A176F2",
-                "중독": "#36B9D6",
+                "우울": "#7E9FE6",
+                "불안": "#A991E6",
+                "중독": "#8ECAD8",
             },
         )
         fig.update_traces(texttemplate="%{text:,}", textposition="outside")
         fig.update_layout(
-            margin=dict(l=10, r=40, t=20, b=20),
+            margin=dict(l=6, r=20, t=8, b=10),
             xaxis_title="환자수",
             yaxis_title="",
             legend_title_text="",
             paper_bgcolor="white",
             plot_bgcolor="white",
-            font=dict(color="#334155", size=12),
+            font=dict(color="#475569", size=10),
         )
         fig.update_xaxes(showgrid=True, gridcolor="#E2E8F0", zeroline=False)
         fig.update_yaxes(showgrid=False)
         return fig
 
+    def make_report_chart_images(classification: Dict[str, int], factors: Dict[str, int]) -> List[Dict[str, Any]]:
+        chart_images = []
 
-    def render_report_attached_charts(classification: Dict[str, int], factors: Dict[str, int], key_prefix: str):
+        chart_specs = [
+            ("AI 판별 요약", build_report_risk_chart(classification)),
+            ("HIRA 입내원정보", build_report_hira_chart(classification)),
+            ("주요 28요인", build_report_factor_chart(factors)),
+        ]
+
+        for chart_title, fig in chart_specs:
+            if fig is None:
+                continue
+
+            try:
+                image_bytes = fig.to_image(
+                    format="png",
+                    scale=2,
+                    width=900,
+                    height=420,
+                )
+            except Exception:
+                continue
+
+            chart_images.append(
+                {
+                    "title": chart_title,
+                    "image_bytes": image_bytes,
+                }
+            )
+
+        return chart_images
+
+
+    def render_report_attached_charts(
+        classification: Dict[str, int], 
+        factors: Dict[str, int], 
+        key_prefix: str,
+        mode: str="edit",
+    ): 
         risk_fig = build_report_risk_chart(classification)
         factor_fig = build_report_factor_chart(factors)
         hira_fig = build_report_hira_chart(classification)
 
-        st.markdown('<div class="report-section-title">첨부 차트</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            if mode == "preview":
+                st.markdown(
+                    """
+                    <div class="report-preview-section-title">
+                        6. 첨부 차트
+                        <span class="report-preview-auto-badge">자동 생성</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    """
+                    <div class="report-block-header report-chart-block-header">
+                        <div>
+                            <span class="report-block-title">6. 첨부 차트</span>
+                            <span class="report-edit-badge">자동 생성</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-        c1, c2 = st.columns([0.42, 0.58], gap="medium")
+            top_left_col, top_right_col = st.columns([0.42, 0.58], gap="medium")
 
-        with c1:
+            with top_left_col:
+                with st.container(border=True):
+                    st.markdown(
+                        '<div class="report-attached-chart-title">AI 판별 요약</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.plotly_chart(
+                        risk_fig,
+                        use_container_width=True,
+                        key=f"{key_prefix}_risk_chart",
+                        config={"displayModeBar": False},
+                    )
+
+            with top_right_col:
+                with st.container(border=True):
+                    st.markdown(
+                        '<div class="report-attached-chart-title">HIRA 입내원정보</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if hira_fig is None:
+                        st.info("표시할 HIRA 통계가 없습니다.")
+                    else:
+                        st.plotly_chart(
+                            hira_fig,
+                            use_container_width=True,
+                            key=f"{key_prefix}_hira_chart",
+                            config={"displayModeBar": False},
+                        )
+
+            st.markdown('<div style="height:0.65rem;"></div>', unsafe_allow_html=True)
+
             with st.container(border=True):
-                st.markdown("##### AI 판별 요약")
-                st.plotly_chart(risk_fig, use_container_width=True, key=f"{key_prefix}_risk_chart")
-
-        with c2:
-            with st.container(border=True):
-                st.markdown("##### 주요 28요인")
+                st.markdown(
+                    '<div class="report-attached-chart-title">주요 28요인</div>',
+                    unsafe_allow_html=True,
+                )
                 if factor_fig is None:
                     st.info("표시할 28요인 점수가 없습니다.")
                 else:
-                    st.plotly_chart(factor_fig, use_container_width=True, key=f"{key_prefix}_factor_chart")
+                    st.plotly_chart(
+                        factor_fig,
+                        use_container_width=True,
+                        key=f"{key_prefix}_factor_chart",
+                        config={"displayModeBar": False},
+                    )
 
-        with st.container(border=True):
-            st.markdown("##### HIRA 증상별 입내원정보")
-            if hira_fig is None:
-                st.info("표시할 HIRA 통계가 없습니다.")
-            else:
-                st.plotly_chart(hira_fig, use_container_width=True, key=f"{key_prefix}_hira_chart")
+        st.markdown(
+            """
+            <div class="dashboard-note-line report-ai-note">
+                <span class="dashboard-note-icon">i</span>
+                <span>
+                    AI가 생성한 보고서입니다. 상담사의 전문적 판단에 따라 내용을 검토·수정하여 사용하시기 바랍니다.
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     
     report_caution = "AI가 생성한 보고서입니다. 상담사의 전문적 판단에 따라 내용을 검토·수정하여 사용하시기 바랍니다."
 
@@ -8219,12 +9053,18 @@ def render_report():
         preview_sections = base_sections
         preview_meta = report_meta
 
+    chart_images = make_report_chart_images(
+        classification=classification,
+        factors=result.get("factors", {}),
+    )
+
     report_download_kwargs = {
         "client_id": report_client_id,
         "session_label": report_session_label,
         "metadata": preview_meta,
         "sections": preview_sections,
         "chart_placeholders": chart_placeholders,
+        "chart_images": chart_images,
         "caution_text": report_caution,
         "title": report_title,
     }
@@ -8303,6 +9143,7 @@ def render_report():
                 "metadata": preview_meta,
                 "sections": preview_sections,
                 "chart_placeholders": chart_placeholders,
+                "chart_images": chart_images,
                 "caution_text": report_caution,
                 "title": report_title,
             }
@@ -8376,10 +9217,6 @@ def render_report():
     <div class="report-preview-section-title">5.다음 회기 계획 추천</div>
     <div class="report-preview-section-body">{html_escape(preview_sections.get("report_section_5", ""))}</div>
 </div>
-
-<div class="report-preview-footer-note">
-    {html_escape(report_caution)}
-</div>
 """
 
         st.markdown(preview_html, unsafe_allow_html=True)
@@ -8388,7 +9225,9 @@ def render_report():
             classification=classification,
             factors=result.get("factors", {}),
             key_prefix="preview_report",
+            mode="preview",
         )
+
 
         return
 
@@ -8457,10 +9296,6 @@ def render_report():
         key_prefix="edit_report",
     )
 
-    st.markdown(
-        f'<div class="report-footnote">{html_escape(report_caution)}</div>',
-        unsafe_allow_html=True,
-    )
 
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
 

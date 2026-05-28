@@ -1,9 +1,11 @@
 import os
 import re
+import base64
 from datetime import datetime
 from html import escape as html_escape
 from io import BytesIO
 from typing import Any, Dict
+
 
 REPORT_SECTION_ORDER = [
     ("report_section_1", "주요 증상"),
@@ -14,9 +16,9 @@ REPORT_SECTION_ORDER = [
 ]
 
 DEFAULT_CHART_PLACEHOLDERS = [
-    "위험도 요약 카드 영역",
-    "요인 분석 바 차트 영역",
-    "HIRA 비교 차트 영역",
+    "AI 판별 요약 차트 영역",
+    "HIRA 입내원정보 차트 영역",
+    "주요 28요인 차트 영역",
 ]
 
 DEFAULT_CAUTION_TEXT = "AI가 생성한 보고서입니다. 상담사의 전문적 판단에 따라 내용을 검토·수정하여 사용하시기 바랍니다."
@@ -65,6 +67,7 @@ def _normalize_report_payload(
     metadata: Dict[str, Any] | None = None,
     sections: Dict[str, str] | None = None,
     chart_placeholders: list[str] | None = None,
+    chart_images: list[Dict[str, Any]] | None = None,
     caution_text: str = DEFAULT_CAUTION_TEXT,
     title: str = "상담 요약 보고서",
     client_id: str = "",
@@ -91,15 +94,50 @@ def _normalize_report_payload(
     ordered_sections = []
 
     for key, section_title in REPORT_SECTION_ORDER:
-        ordered_sections.append((section_title, str(normalized_sections.get(key, "")).strip()))
+        ordered_sections.append(
+            (
+                section_title,
+                str(normalized_sections.get(key, "")).strip(),
+            )
+        )
+
+    valid_chart_images = []
+
+    for chart in chart_images or []:
+        chart_title = str(chart.get("title", "첨부 차트")).strip() or "첨부 차트"
+        image_bytes = chart.get("image_bytes")
+
+        if not image_bytes:
+            continue
+
+        valid_chart_images.append(
+            {
+                "title": chart_title,
+                "image_bytes": image_bytes,
+            }
+        )
 
     return {
         "title": title,
         "metadata": normalized_meta,
         "sections": ordered_sections,
         "chart_placeholders": chart_placeholders or DEFAULT_CHART_PLACEHOLDERS,
+        "chart_images": valid_chart_images,
         "caution_text": caution_text or DEFAULT_CAUTION_TEXT,
     }
+
+
+def _split_gender_age_region(meta: Dict[str, Any]) -> tuple[str, str]:
+    gender_age_region = str(meta.get("성별/연령대/지역", "-"))
+    gender_age = str(meta.get("성별·연령대", gender_age_region))
+    region = str(meta.get("지역", "-"))
+
+    if region == "-" and " · " in gender_age_region:
+        parts = gender_age_region.split(" · ", 1)
+        gender_age = parts[0].strip()
+        region = parts[1].strip()
+
+    return gender_age or "-", region or "-"
 
 
 def make_docx_report_bytes(
@@ -110,12 +148,14 @@ def make_docx_report_bytes(
     metadata: Dict[str, Any] | None = None,
     sections: Dict[str, str] | None = None,
     chart_placeholders: list[str] | None = None,
+    chart_images: list[Dict[str, Any]] | None = None,
     caution_text: str = DEFAULT_CAUTION_TEXT,
     title: str = "상담 요약 보고서",
 ) -> bytes | None:
     try:
         from docx import Document
         from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Inches, Pt, RGBColor
     except Exception:
         return None
 
@@ -124,37 +164,55 @@ def make_docx_report_bytes(
         metadata=metadata,
         sections=sections,
         chart_placeholders=chart_placeholders,
+        chart_images=chart_images,
         caution_text=caution_text,
         title=title,
         client_id=client_id,
         session_label=session_label,
         created_at=created_at,
     )
+
     doc = Document()
+
+    section = doc.sections[0]
+    section.top_margin = Inches(0.7)
+    section.bottom_margin = Inches(0.7)
+    section.left_margin = Inches(0.7)
+    section.right_margin = Inches(0.7)
+
+    styles = doc.styles
+
+    if "Normal" in styles:
+        normal_style = styles["Normal"]
+        normal_style.font.name = "맑은 고딕"
+        normal_style.font.size = Pt(10.5)
+
     title_paragraph = doc.add_heading(payload["title"], level=0)
     title_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
+    for run in title_paragraph.runs:
+        run.font.name = "맑은 고딕"
+        run.font.color.rgb = RGBColor(15, 23, 42)
+
     meta = payload["metadata"]
-
-    gender_age_region = str(meta.get("성별/연령대/지역", "-"))
-    gender_age = str(meta.get("성별·연령대", gender_age_region))
-    region = str(meta.get("지역", "-"))
-
-    if region == "-" and " · " in gender_age_region:
-        parts = gender_age_region.split(" · ", 1)
-        gender_age = parts[0].strip()
-        region = parts[1].strip()
+    gender_age, region = _split_gender_age_region(meta)
 
     meta_rows = [
         [
-            "내담자 ID", meta.get("내담자 ID", client_id or "-"),
-            "회기", meta.get("회기", session_label or "-"),
-            "성별·연령대", gender_age or "-",
+            "내담자 ID",
+            meta.get("내담자 ID", client_id or "-"),
+            "회기",
+            meta.get("회기", session_label or "-"),
+            "성별·연령대",
+            gender_age or "-",
         ],
         [
-            "지역", region or "-",
-            "상담 분류", meta.get("상담 분류", "-"),
-            "작성일", meta.get("작성일", "-"),
+            "지역",
+            region or "-",
+            "상담 분류",
+            meta.get("상담 분류", "-"),
+            "작성일",
+            meta.get("작성일", "-"),
         ],
     ]
 
@@ -166,26 +224,77 @@ def make_docx_report_bytes(
             cell = table.cell(row_idx, col_idx)
             cell.text = str(value or "-")
 
-            if col_idx in (0, 2, 4):
-                for paragraph in cell.paragraphs:
-                    for run in paragraph.runs:
+            for paragraph in cell.paragraphs:
+                for run in paragraph.runs:
+                    run.font.name = "맑은 고딕"
+                    run.font.size = Pt(9.5)
+
+                    if col_idx in (0, 2, 4):
                         run.bold = True
 
     doc.add_paragraph("")
 
-    doc.add_paragraph("")
-
     for index, (section_title, body) in enumerate(payload["sections"], start=1):
-        doc.add_heading(f"{index}. {section_title}", level=1)
-        doc.add_paragraph(str(body or "-"))
+        heading = doc.add_heading(f"{index}. {section_title}", level=1)
 
-    doc.add_heading("첨부 차트 영역", level=1)
+        for run in heading.runs:
+            run.font.name = "맑은 고딕"
+            run.font.size = Pt(13)
+            run.font.color.rgb = RGBColor(29, 78, 216)
 
-    for placeholder in payload["chart_placeholders"]:
-        doc.add_paragraph(str(placeholder))
+        paragraph = doc.add_paragraph(str(body or "-"))
 
-    doc.add_heading("주의 문구", level=1)
-    doc.add_paragraph(payload["caution_text"])
+        for run in paragraph.runs:
+            run.font.name = "맑은 고딕"
+            run.font.size = Pt(10.5)
+
+        doc.add_paragraph("")
+
+    chart_heading = doc.add_heading("6. 첨부 차트", level=1)
+
+    for run in chart_heading.runs:
+        run.font.name = "맑은 고딕"
+        run.font.size = Pt(13)
+        run.font.color.rgb = RGBColor(29, 78, 216)
+
+    if payload["chart_images"]:
+        for chart in payload["chart_images"]:
+            chart_title = str(chart.get("title", "첨부 차트"))
+            image_bytes = chart.get("image_bytes")
+
+            if not image_bytes:
+                continue
+
+            sub_heading = doc.add_heading(chart_title, level=2)
+
+            for run in sub_heading.runs:
+                run.font.name = "맑은 고딕"
+                run.font.size = Pt(11)
+                run.font.color.rgb = RGBColor(15, 23, 42)
+
+            try:
+                doc.add_picture(BytesIO(image_bytes), width=Inches(6.2))
+            except Exception:
+                doc.add_paragraph(f"{chart_title} 이미지를 삽입하지 못했습니다.")
+
+            doc.add_paragraph("")
+    else:
+        for placeholder in payload["chart_placeholders"]:
+            doc.add_paragraph(str(placeholder))
+
+    caution_heading = doc.add_heading("주의 문구", level=1)
+
+    for run in caution_heading.runs:
+        run.font.name = "맑은 고딕"
+        run.font.size = Pt(13)
+        run.font.color.rgb = RGBColor(29, 78, 216)
+
+    caution_paragraph = doc.add_paragraph(payload["caution_text"])
+
+    for run in caution_paragraph.runs:
+        run.font.name = "맑은 고딕"
+        run.font.size = Pt(9.5)
+        run.font.color.rgb = RGBColor(30, 64, 175)
 
     buffer = BytesIO()
     doc.save(buffer)
@@ -200,6 +309,7 @@ def make_pdf_report_bytes(
     metadata: Dict[str, Any] | None = None,
     sections: Dict[str, str] | None = None,
     chart_placeholders: list[str] | None = None,
+    chart_images: list[Dict[str, Any]] | None = None,
     caution_text: str = DEFAULT_CAUTION_TEXT,
     title: str = "상담 요약 보고서",
 ) -> bytes | None:
@@ -216,6 +326,7 @@ def make_pdf_report_bytes(
         metadata=metadata,
         sections=sections,
         chart_placeholders=chart_placeholders,
+        chart_images=chart_images,
         caution_text=caution_text,
         title=title,
         client_id=client_id,
@@ -224,16 +335,7 @@ def make_pdf_report_bytes(
     )
 
     meta = payload["metadata"]
-
-    gender_age_region = str(meta.get("성별/연령대/지역", "-"))
-    gender_age = str(meta.get("성별·연령대", gender_age_region))
-    region = str(meta.get("지역", "-"))
-
-    # "30대 여성 · 서울"처럼 합쳐진 값이면 가능한 범위에서 분리
-    if region == "-" and " · " in gender_age_region:
-        parts = gender_age_region.split(" · ", 1)
-        gender_age = parts[0].strip()
-        region = parts[1].strip()
+    gender_age, region = _split_gender_age_region(meta)
 
     meta_rows = [
         [
@@ -268,10 +370,22 @@ def make_pdf_report_bytes(
         for index, (section_title, body) in enumerate(payload["sections"], start=1)
     )
 
-    chart_html = "\n".join(
-        f"<div class='chart-placeholder'>{html_escape(str(placeholder))}</div>"
-        for placeholder in payload["chart_placeholders"]
-    )
+    if payload["chart_images"]:
+        chart_html = "\n".join(
+            f"""
+            <div class="chart-image-card">
+                <h3>{html_escape(str(chart.get("title", "첨부 차트")))}</h3>
+                <img src="data:image/png;base64,{base64.b64encode(chart.get("image_bytes", b"")).decode("utf-8")}" />
+            </div>
+            """
+            for chart in payload["chart_images"]
+            if chart.get("image_bytes")
+        )
+    else:
+        chart_html = "\n".join(
+            f"<div class='chart-placeholder'>{html_escape(str(placeholder))}</div>"
+            for placeholder in payload["chart_placeholders"]
+        )
 
     html = f"""
 <!doctype html>
@@ -283,158 +397,177 @@ def make_pdf_report_bytes(
             size: A4;
             margin: 18mm;
         }}
+
         body {{
             font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", sans-serif;
-            color: #111827;
+            color: #0F172A;
             font-size: 11pt;
             line-height: 1.75;
             word-break: keep-all;
             overflow-wrap: anywhere;
+            background: #FFFFFF;
         }}
+
+        .report-sheet {{
+            padding: 0;
+        }}
+
+        .report-date {{
+            text-align: right;
+            color: #64748B;
+            font-size: 9pt;
+            margin-bottom: 3mm;
+        }}
+
         .title {{
-            color: #123160;
+            color: #0F172A;
             font-size: 22pt;
-            font-weight: 700;
+            font-weight: 800;
             text-align: center;
             margin: 0 0 8mm;
         }}
-            body {{
-                font-family: "Pretendard", "Noto Sans CJK KR", sans-serif;
-                color: #0F172A;
-                background: #FFFFFF;
-            }}
 
-            .report-sheet {{
-                padding: 12mm;
-            }}
+        .meta-table {{
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid #D8E1F0;
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 0 0 9mm;
+        }}
 
-            .report-date {{
-                text-align: right;
-                color: #64748B;
-                font-size: 9pt;
-                margin-bottom: 3mm;
-            }}
+        .meta-table th,
+        .meta-table td {{
+            border-right: 1px solid #D8E1F0;
+            border-bottom: 1px solid #D8E1F0;
+            padding: 3mm 4mm;
+            font-size: 10pt;
+            text-align: left;
+        }}
 
-            .title {{
-                color: #0F172A;
-                font-size: 22pt;
-                font-weight: 800;
-                text-align: center;
-                margin: 0 0 8mm;
-            }}
+        .meta-table th {{
+            background: #F8FAFC;
+            color: #334155;
+            font-weight: 700;
+            width: 14%;
+        }}
 
-            .meta-table {{
-                width: 100%;
-                border-collapse: separate;
-                border-spacing: 0;
-                border: 1px solid #D8E1F0;
-                border-radius: 8px;
-                overflow: hidden;
-                margin: 0 0 9mm;
-            }}
+        .meta-table td {{
+            background: #FFFFFF;
+            color: #111827;
+            font-weight: 600;
+            width: 19%;
+        }}
 
-            .meta-table th,
-            .meta-table td {{
-                border-right: 1px solid #D8E1F0;
-                border-bottom: 1px solid #D8E1F0;
-                padding: 3mm 4mm;
-                font-size: 10pt;
-                text-align: left;
-            }}
+        .meta-table tr:last-child th,
+        .meta-table tr:last-child td {{
+            border-bottom: none;
+        }}
 
-            .meta-table th {{
-                background: #F8FAFC;
-                color: #334155;
-                font-weight: 700;
-                width: 14%;
-            }}
+        .meta-table th:last-child,
+        .meta-table td:last-child {{
+            border-right: none;
+        }}
 
-            .meta-table td {{
-                background: #FFFFFF;
-                color: #111827;
-                font-weight: 600;
-                width: 19%;
-            }}
+        .report-section {{
+            margin: 0 0 7mm;
+            page-break-inside: avoid;
+        }}
 
-            .meta-table tr:last-child th,
-            .meta-table tr:last-child td {{
-                border-bottom: none;
-            }}
+        .report-section + .report-section {{
+            border-top: 1px dashed #CBD5E1;
+            padding-top: 5mm;
+        }}
 
-            .meta-table th:last-child,
-            .meta-table td:last-child {{
-                border-right: none;
-            }}
+        .report-section h2 {{
+            color: #1D4ED8;
+            font-size: 13pt;
+            margin: 0 0 2.5mm;
+        }}
 
-            .report-section {{
-                margin: 0 0 7mm;
-                page-break-inside: avoid;
-            }}
+        .report-section p {{
+            margin: 0;
+            font-size: 10.5pt;
+            line-height: 1.7;
+            white-space: pre-wrap;
+        }}
 
-            .report-section + .report-section {{
-                border-top: 1px dashed #CBD5E1;
-                padding-top: 5mm;
-            }}
+        .chart-report-section {{
+            page-break-inside: auto;
+        }}
 
-            .report-section h2 {{
-                color: #1D4ED8;
-                font-size: 13pt;
-                margin: 0 0 2.5mm;
-            }}
+        .chart-grid {{
+            display: block;
+        }}
 
-            .report-section p {{
-                margin: 0;
-                font-size: 10.5pt;
-                line-height: 1.7;
-                white-space: pre-wrap;
-            }}
+        .chart-placeholder {{
+            border: 1px dashed #CBD5E1;
+            border-radius: 8px;
+            padding: 8mm 4mm;
+            margin-bottom: 5mm;
+            text-align: center;
+            color: #64748B;
+            font-size: 9.5pt;
+        }}
 
-            .chart-placeholder-panel {{
-                margin-top: 8mm;
-            }}
+        .chart-image-card {{
+            border: 1px solid #D8E1F0;
+            border-radius: 10px;
+            padding: 5mm;
+            margin-bottom: 6mm;
+            page-break-inside: avoid;
+        }}
 
-            .chart-placeholder-panel h2 {{
-                color: #1D4ED8;
-                font-size: 13pt;
-                margin-bottom: 4mm;
-            }}
+        .chart-image-card h3 {{
+            margin: 0 0 4mm;
+            color: #0F172A;
+            font-size: 11pt;
+            font-weight: 700;
+        }}
 
-            .chart-placeholder-grid {{
-                display: grid;
-                grid-template-columns: repeat(3, 1fr);
-                gap: 4mm;
-            }}
+        .chart-image-card img {{
+            width: 100%;
+            height: auto;
+            display: block;
+        }}
 
-            .chart-placeholder {{
-                border: 1px dashed #CBD5E1;
-                border-radius: 8px;
-                padding: 8mm 4mm;
-                text-align: center;
-                color: #64748B;
-                font-size: 9.5pt;
-            }}
-
-            .caution {{
-                margin-top: 8mm;
-                background: #EFF6FF;
-                border: 1px solid #BFDBFE;
-                border-radius: 8px;
-                padding: 4mm;
-                color: #1E40AF;
-                font-size: 9.5pt;
-            }}
+        .caution {{
+            margin-top: 8mm;
+            background: #EFF6FF;
+            border: 1px solid #BFDBFE;
+            border-radius: 8px;
+            padding: 4mm;
+            color: #1E40AF;
+            font-size: 9.5pt;
+            line-height: 1.6;
+        }}
     </style>
 </head>
 <body>
-    <div class="title">{html_escape(payload["title"])}</div>
-    <table class="meta-table">{meta_html}</table>
-    {section_html}
-    <section class="report-section">
-        <h2>첨부 차트 영역</h2>
-        <div class="chart-grid">{chart_html}</div>
-    </section>
-    <div class="caution">{html_escape(payload["caution_text"])}</div>
+    <div class="report-sheet">
+        <div class="report-date">작성일: {html_escape(str(meta.get("작성일", "-")))}</div>
+        <div class="title">{html_escape(payload["title"])}</div>
+
+        <table class="meta-table">
+            {meta_html}
+        </table>
+
+        {section_html}
+
+        <section class="report-section chart-report-section">
+            <h2>6. 첨부 차트</h2>
+            <div class="chart-grid">
+                {chart_html}
+            </div>
+        </section>
+
+        <div class="caution">
+            {html_escape(payload["caution_text"])}
+        </div>
+    </div>
 </body>
 </html>
 """
+
     return HTML(string=html).write_pdf()
