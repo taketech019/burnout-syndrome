@@ -6,6 +6,10 @@
 import json
 import base64
 import hashlib
+import os
+import chromadb
+import streamlit as st
+from sentence_transformers import SentenceTransformer
 import re
 from datetime import datetime
 from html import escape as html_escape
@@ -73,11 +77,98 @@ GEMINI_API_KEY = get_secret("GEMINI_API_KEY", "")
 GEMINI_MODEL = get_secret("GEMINI_MODEL", "gemini-2.5-flash")
 
 CHROMA_DB_PATH = get_secret("CHROMA_DB_PATH", "./chroma_db")
-RAG_EMBEDDING_MODEL = get_secret("RAG_EMBEDDING_MODEL", "BAAI/bge-m3")
+RAG_EMBEDDING_MODEL = get_secret(
+    "RAG_EMBEDDING_MODEL",
+    "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
+)
 
 KLUEBERT_MODEL_NAME = get_secret("KLUEBERT_MODEL_NAME", "AIHub-KlueBERT-demo")
 KOALPACA_MODEL_NAME = get_secret("KOALPACA_MODEL_NAME", "Koalpaca-demo")
 
+# =========================================================
+# 공통 컬러 시스템
+# 첨부한 레퍼런스처럼 부드럽지만 서로 구분되는 색상으로 재설계
+# =========================================================
+
+CONTEXT_THEME = {
+    "depression": {
+        "accent": "#4F6EF7",
+        "accent_dark": "#2F4ED8",
+        "soft_bg": "#EEF3FF",
+        "border": "#A9BAFF",
+    },
+    "anxiety": {
+        "accent": "#A176F2",
+        "accent_dark": "#7B57D1",
+        "soft_bg": "#F5EFFF",
+        "border": "#D8C4FF",
+    },
+    "addiction": {
+        "accent": "#36B9D6",
+        "accent_dark": "#1989A3",
+        "soft_bg": "#ECFBFF",
+        "border": "#B6ECF5",
+    },
+    "sleep": {
+        "accent": "#62C9BC",
+        "accent_dark": "#329E92",
+        "soft_bg": "#EDFCF8",
+        "border": "#BCEEE5",
+    },
+    "fatigue": {
+        "accent": "#7E91C7",
+        "accent_dark": "#5E73A9",
+        "soft_bg": "#F1F5FF",
+        "border": "#CAD7F4",
+    },
+    "intervention": {
+        "accent": "#FF9DB5",
+        "accent_dark": "#E46E8E",
+        "soft_bg": "#FFF1F5",
+        "border": "#FFD2DE",
+    },
+    "other": {
+        "accent": "#94A3B8",
+        "accent_dark": "#64748B",
+        "soft_bg": "#F8FAFC",
+        "border": "#CBD5E1",
+    },
+}
+
+SERIES_COLOR_MAP = {
+    "우울": "#6B8EF7",
+    "불안": "#B08AF5",
+    "중독": "#5ECADF",
+    "수면문제": "#7DD6CC",
+    "피로감": "#9AA9D6",
+    "상담사 개입": "#F6A6BE",
+    "변화/기타": "#CBD5E1",
+}
+
+FACTOR_CATEGORY_COLOR_MAP = {
+    "우울": "#6B8EF7",
+    "불안": "#B08AF5",
+    "중독": "#5ECADF",
+    "상담사 개입": "#F6A6BE",
+    "변화/기타": "#CBD5E1",
+}
+
+DONUT_PALETTE = [
+    "#BFDBFE",  # soft blue
+    "#DDD6FE",  # soft violet
+    "#99F6E4",  # soft teal
+    "#FBCFE8",  # soft pink
+    "#FDE68A",  # soft amber
+    "#BBF7D0",  # soft green
+    "#BAE6FD",  # soft sky
+    "#CBD5E1",  # soft slate
+    "#F0ABFC",  # soft orchid
+    "#FDA4AF",  # soft rose
+]
+
+# HELPER
+def get_context_theme(context_key: str) -> Dict[str, str]:
+    return CONTEXT_THEME.get(str(context_key or "").strip(), CONTEXT_THEME["other"])
 
 # =========================================================
 # 2. Streamlit 기본 화면 설정
@@ -287,10 +378,54 @@ def load_processed_sessions() -> Tuple[pd.DataFrame, pd.DataFrame, Dict[Tuple[st
             ]
         ].reset_index(drop=True)
 
+        def make_session_date(row: pd.Series) -> str:
+            """
+            원본 데이터에는 실제 상담일이 없고 split이 Training/Validation으로 들어오는 경우가 있어,
+            화면 표시용 날짜를 생성한다.
+            """
+            for candidate_col in ["date", "created_at", "session_date", "상담일"]:
+                value = str(row.get(candidate_col, "") or "").strip()
+                if value and value.lower() not in ["nan", "none", "training", "validation"]:
+                    try:
+                        return pd.to_datetime(value).strftime("%Y-%m-%d")
+                    except Exception:
+                        return value
+
+            try:
+                session_no = int(float(row.get("session", 1) or 1))
+            except Exception:
+                session_no = 1
+
+            # 데모용 기준 날짜. 실제 상담일 데이터가 없으므로 회기 번호 기준으로 7일 간격 표시.
+            base_date = pd.Timestamp("2026-05-01")
+            return (base_date + pd.Timedelta(days=(session_no - 1) * 7)).strftime("%Y-%m-%d")
+
+        def make_session_date(row: pd.Series) -> str:
+            """
+            원본 데이터에는 실제 상담일이 없고 split이 Training/Validation으로 들어오는 경우가 있어,
+            화면 표시용 날짜를 생성한다.
+            """
+            for candidate_col in ["date", "created_at", "session_date", "상담일"]:
+                value = str(row.get(candidate_col, "") or "").strip()
+                if value and value.lower() not in ["nan", "none", "training", "validation"]:
+                    try:
+                        return pd.to_datetime(value).strftime("%Y-%m-%d")
+                    except Exception:
+                        return value
+
+            try:
+                session_no = int(float(row.get("session", 1) or 1))
+            except Exception:
+                session_no = 1
+
+            # 데모용 기준 날짜. 실제 상담일 데이터가 없으므로 회기 번호 기준으로 7일 간격 표시.
+            base_date = pd.Timestamp("2026-05-01")
+            return (base_date + pd.Timedelta(days=(session_no - 1) * 7)).strftime("%Y-%m-%d")
+
         # 회기 목록 생성
         sessions = raw.copy()
         sessions["내담자 ID"] = sessions["client_id"]
-        sessions["상담일"] = sessions["split"]
+        sessions["상담일"] = sessions.apply(make_session_date, axis=1)
         sessions["상담 주제"] = sessions["class"].fillna("상담 회기")
         sessions["보고서 상태"] = "전처리 완료"
 
@@ -1228,35 +1363,411 @@ def get_session_row():
 def clear_chat():
     st.session_state.chat_history = []
 
+# =========================================================
+# RAG / ChromaDB 검색 + Gemini 답변 생성
+# =========================================================
+
+RAG_COLLECTION_LABELS = {
+    "counseling_cases": "유사 상담 발화",
+    "session_summaries": "유사 회기 요약",
+    "clinical_references": "임상 참고문서",
+    "counseling_db": "상담 RAG DB",
+}
+
+
+@st.cache_resource(show_spinner=False)
+def load_rag_embedding_model():
+    """
+    ChromaDB 검색용 query embedding 모델.
+    주의: DB 구축 시 사용한 embedding 모델과 동일해야 한다.
+    """
+    return SentenceTransformer(RAG_EMBEDDING_MODEL)
+
+
+@st.cache_resource(show_spinner=False)
+def load_chroma_client():
+    """
+    현재 프로젝트 루트의 ./chroma_db를 로드한다.
+    사진상 chroma_db/chroma.sqlite3가 있으므로 기본 경로는 현재 구조와 맞다.
+    """
+    return chromadb.PersistentClient(path=CHROMA_DB_PATH)
+
+
+def list_chroma_collection_names() -> List[str]:
+    """
+    현재 ChromaDB에 저장된 collection 이름 목록을 반환한다.
+    ChromaDB 버전에 따라 list_collections() 반환 타입이 다를 수 있어 방어적으로 처리한다.
+    """
+    try:
+        client = load_chroma_client()
+        collections = client.list_collections()
+    except Exception:
+        return []
+
+    names = []
+
+    for item in collections:
+        if hasattr(item, "name"):
+            names.append(item.name)
+        else:
+            names.append(str(item))
+
+    return names
+
+
+def get_rag_target_collections() -> List[str]:
+    """
+    우선순위:
+    1. counseling_cases / session_summaries / clinical_references
+    2. counseling_db
+    3. 실제 존재하는 모든 collection
+
+    이렇게 하는 이유:
+    - 네 문서 설계상 collection을 여러 개로 나누는 구조일 수도 있고,
+    - LangChain 기본값처럼 하나의 collection만 있을 수도 있기 때문.
+    """
+    available = list_chroma_collection_names()
+
+    if not available:
+        return []
+
+    preferred = [
+        "counseling_cases",
+        "session_summaries",
+        "clinical_references",
+        "counseling_db",
+    ]
+
+    matched = [name for name in preferred if name in available]
+
+    if matched:
+        return matched
+
+    return available
+
+
+def get_selected_session_script_for_rag() -> str:
+    """
+    현재 선택된 내담자/회기의 상담 스크립트를 RAG 답변 생성에 함께 넣는다.
+    """
+    try:
+        return build_dialogue_text(st.session_state.dialogue_rows).strip()
+    except Exception:
+        return ""
+
+
+def format_rag_source_title(collection_name: str, metadata: dict, rank: int) -> str:
+    """
+    검색 결과 metadata를 출처 표시용 제목으로 변환한다.
+    """
+    label = RAG_COLLECTION_LABELS.get(collection_name, collection_name)
+
+    source = (
+        metadata.get("source")
+        or metadata.get("title")
+        or metadata.get("filename")
+        or metadata.get("client_id")
+        or metadata.get("id")
+        or f"검색 결과 {rank}"
+    )
+
+    session = metadata.get("session") or metadata.get("회기")
+    class_label = metadata.get("class") or metadata.get("label")
+
+    parts = [label, str(source)]
+
+    if session not in [None, "", "nan"]:
+        parts.append(f"{session}회기" if str(session).isdigit() else str(session))
+
+    if class_label not in [None, "", "nan"]:
+        parts.append(str(class_label))
+
+    return " / ".join(parts)
+
+
+def search_rag_documents(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    ChromaDB에서 관련 문서를 검색한다.
+    여러 collection이 있으면 collection별로 검색한 뒤 합친다.
+    """
+    clean_query = str(query or "").strip()
+
+    if not clean_query:
+        return []
+
+    target_collections = get_rag_target_collections()
+
+    if not target_collections:
+        return []
+
+    try:
+        client = load_chroma_client()
+        embedding_model = load_rag_embedding_model()
+        query_embedding = embedding_model.encode(clean_query).tolist()
+    except Exception as error:
+        return [
+            {
+                "collection": "system",
+                "title": "RAG 로딩 오류",
+                "document": f"RAG 모델 또는 ChromaDB 로딩 중 오류가 발생했습니다: {error}",
+                "metadata": {},
+                "distance": None,
+            }
+        ]
+
+    all_results = []
+
+    for collection_name in target_collections:
+        try:
+            collection = client.get_collection(collection_name)
+
+            result = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+                include=["documents", "metadatas", "distances"],
+            )
+
+            documents = result.get("documents", [[]])[0]
+            metadatas = result.get("metadatas", [[]])[0]
+            distances = result.get("distances", [[]])[0]
+
+            for idx, document in enumerate(documents):
+                metadata = metadatas[idx] if idx < len(metadatas) and metadatas[idx] else {}
+                distance = distances[idx] if idx < len(distances) else None
+
+                all_results.append(
+                    {
+                        "collection": collection_name,
+                        "title": format_rag_source_title(collection_name, metadata, idx + 1),
+                        "document": str(document or ""),
+                        "metadata": metadata,
+                        "distance": distance,
+                    }
+                )
+
+        except Exception as error:
+            all_results.append(
+                {
+                    "collection": collection_name,
+                    "title": f"{collection_name} 검색 오류",
+                    "document": f"{collection_name} collection 검색 중 오류가 발생했습니다: {error}",
+                    "metadata": {},
+                    "distance": None,
+                }
+            )
+
+    def distance_sort_key(item: Dict[str, Any]):
+        distance = item.get("distance")
+        return float(distance) if distance is not None else 999999
+
+    all_results = sorted(all_results, key=distance_sort_key)
+
+    return all_results[:top_k]
+
+
+def build_rag_context_text(rag_results: List[Dict[str, Any]], max_chars_per_doc: int = 900) -> str:
+    """
+    Gemini prompt에 넣을 검색 근거 문자열 생성.
+    """
+    blocks = []
+
+    for idx, item in enumerate(rag_results, start=1):
+        title = item.get("title", f"검색 결과 {idx}")
+        document = str(item.get("document", "") or "").strip()
+        document = document[:max_chars_per_doc]
+
+        blocks.append(
+            f"[출처 {idx}] {title}\n{document}"
+        )
+
+    return "\n\n".join(blocks)
+
+def clean_chatbot_answer(answer: str) -> str:
+    """
+    RAG/LLM 답변이 코드처럼 보이지 않도록 마크다운 잡음을 정리한다.
+    - --- 제거
+    - ### 제목 제거/정리
+    - 과도한 공백 정리
+    - '상담사님,' 같은 도입부는 유지
+    """
+    text = str(answer or "").strip()
+
+    # 코드블록이 섞인 경우 제거
+    text = text.replace("```markdown", "")
+    text = text.replace("```", "")
+
+    # 수평선 제거
+    text = re.sub(r"^\s*[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+
+    # ### 1. 제목 → 1. 제목 형태로 정리
+    text = re.sub(r"^\s*#{1,6}\s*", "", text, flags=re.MULTILINE)
+
+    # 굵게 표시용 **는 일부 남겨도 되지만, 너무 코드처럼 보이면 제거
+    text = text.replace("**", "")
+
+    # 특수 마크다운 리스트 기호 과다 정리
+    text = re.sub(r"^\s*[-*]\s+", "• ", text, flags=re.MULTILINE)
+
+    # 빈 줄 과다 제거
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+def generate_rag_answer_with_gemini(
+    question: str,
+    rag_results: List[Dict[str, Any]],
+) -> str:
+    """
+    Gemini API로 RAG 답변을 생성한다.
+    GEMINI_API_KEY가 없으면 검색 결과 요약만 반환한다.
+    """
+    current_script = get_selected_session_script_for_rag()
+    rag_context = build_rag_context_text(rag_results)
+
+    if not rag_results:
+        return (
+            "ChromaDB에서 관련 검색 결과를 찾지 못했습니다.\n\n"
+            "확인할 항목:\n"
+            "1. chroma_db 경로가 ./chroma_db인지\n"
+            "2. collection 이름이 실제로 존재하는지\n"
+            "3. DB 구축 시 사용한 embedding 모델과 RAG_EMBEDDING_MODEL이 같은지"
+        )
+
+    if not GEMINI_API_KEY:
+        source_titles = "\n".join(
+            [f"- {item.get('title', '출처 없음')}" for item in rag_results]
+        )
+
+        return (
+            "Gemini API 키가 없어 답변 생성은 실행하지 않고, ChromaDB 검색 결과만 표시합니다.\n\n"
+            "검색된 근거:\n"
+            f"{source_titles}\n\n"
+            "Streamlit Secrets 또는 .env에 GEMINI_API_KEY를 설정하면 검색 결과 기반 답변 생성까지 실행됩니다."
+        )
+
+    try:
+        import google.generativeai as genai
+
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(GEMINI_MODEL)
+
+        prompt = f"""
+당신은 심리상담사를 보조하는 AI입니다.
+아래의 [현재 선택 회기 상담 기록]과 [RAG 검색 근거]만 바탕으로 답변하세요.
+
+중요 원칙:
+- 진단 확정처럼 표현하지 마세요.
+- "우울증입니다", "불안장애입니다"처럼 단정하지 마세요.
+- 데이터 라벨, 유사 사례, 참고 문서는 상담사의 검토를 돕는 근거로만 표현하세요.
+- 검색 근거에 없는 내용은 추측하지 마세요.
+- 자해/자살 관련 표현이 있으면 별도 확인 필요 항목으로 분리하세요.
+- 최종 판단은 상담사가 수행해야 한다고 명시하세요.
+- 마지막에 참고한 출처 번호를 표시하세요.
+
+[현재 선택 회기 상담 기록]
+{current_script[:2500]}
+
+[RAG 검색 근거]
+{rag_context}
+
+[상담사 질문]
+{question}
+
+[답변 형식]
+아래 번호 형식만 사용하세요. 마크다운 제목 기호(###), 수평선(---), 코드블록(```), 표는 사용하지 마세요.
+
+1. 핵심 요약
+- 현재 회기에서 확인되는 내용을 3~5문장으로 요약
+
+2. 근거 기반 유사 사례/참고 내용
+- RAG 검색 결과와 연결되는 유사 패턴 정리
+
+3. 다음 회기에서 확인할 내용
+- 상담사가 다음 회기에서 확인할 질문 후보 정리
+
+4. 개입 방향 초안
+- 상담사가 참고할 수 있는 개입 방향 초안 정리
+
+5. 주의사항
+- 진단 확정 금지, 상담사 최종 판단 필요, 자해/자살 관련 확인 필요 여부 정리
+
+6. 참고 출처
+- 사용한 출처 번호만 간단히 표시
+"""
+
+        response = model.generate_content(prompt)
+
+        answer = getattr(response, "text", "")
+
+        if not answer:
+            return "Gemini 응답이 비어 있습니다. API 응답 상태를 확인하세요."
+
+        return answer.strip()
+
+    except Exception as error:
+        return f"Gemini RAG 답변 생성 중 오류가 발생했습니다: {error}"
 
 def add_mock_answer(user_prompt: str):
+    """
+    기존 mock 챗봇 응답 함수 이름은 유지한다.
+    이유:
+    - render_chatbot() 내부에서 이미 add_mock_answer(question)을 호출하고 있기 때문.
+    - 함수 이름만 유지하고 내부 동작을 실제 RAG로 바꾸면 UI 코드를 거의 건드리지 않아도 된다.
+    """
+    question = str(user_prompt or "").strip()
+
+    if not question:
+        return
+
+    now_label = datetime.now().strftime("%p %I:%M").replace("AM", "오전").replace("PM", "오후")
+
     st.session_state.chat_history.append(
         {
             "role": "user",
-            "content": user_prompt,
+            "content": question,
+            "time": now_label,
         }
     )
+
+    # 현재 선택 회기 상담 기록까지 query에 포함해 유사 사례 검색 품질을 높인다.
+    current_script = get_selected_session_script_for_rag()
+
+    if current_script:
+        retrieval_query = (
+            f"{question}\n\n"
+            f"[현재 상담 기록]\n"
+            f"{current_script[:1500]}"
+        )
+    else:
+        retrieval_query = question
+
+    rag_results = search_rag_documents(
+        query=retrieval_query,
+        top_k=5,
+    )
+
+    answer = generate_rag_answer_with_gemini(
+        question=question,
+        rag_results=rag_results,
+    )
+    answer = clean_chatbot_answer(answer)
+    
+    sources = []
+
+    for item in rag_results:
+        sources.append(
+            {
+                "title": item.get("title", "출처 없음"),
+                "desc": str(item.get("document", ""))[:250],
+            }
+        )
 
     st.session_state.chat_history.append(
         {
             "role": "assistant",
-            "content": (
-                "현재는 RAG 연결 전 목업 응답입니다. 실제 구현 시 ChromaDB에서 유사 상담 사례, "
-                "회기 요약, 임상 참고문서를 검색한 뒤 답변을 생성합니다.\n\n"
-                "현재 상담 내용 기준으로는 수면 양상, 피로 지속 기간, 출근 전 불안 상황, "
-                "회피 행동, 자기비하적 사고, 보호 요인을 다음 회기에서 확인할 수 있습니다. "
-                "최종 판단은 상담사가 수행해야 합니다."
-            ),
-            "sources": [
-                {
-                    "title": "Mock 유사 상담 사례 #CASE-014",
-                    "desc": "수면 문제·출근 전 불안·직무 스트레스가 함께 나타난 유사 상담 사례",
-                },
-                {
-                    "title": "Mock 임상 참고문서",
-                    "desc": "초기 상담 기록에서 위험 신호를 확인할 때 참고하는 체크리스트",
-                },
-            ],
+            "content": answer,
+            "sources": sources,
+            "time": now_label,
         }
     )
 
@@ -1268,6 +1779,24 @@ PRIMARY = "#2563EB"
 PRIMARY_DARK = "#1E40AF"
 PRIMARY_LIGHT = "#EFF6FF"
 PRIMARY_SOFT = "#BFDBFE"
+
+# =========================================================
+# 대시보드 공통 색상 팔레트
+# 반복 지표는 모든 차트에서 같은 색을 사용한다.
+# =========================================================
+
+DASHBOARD_COLORS = {
+    "우울": "#6E85B7",          # muted powder blue
+    "불안": "#94B3FD",          # soft periwinkle
+    "중독": "#7A6FC4",          # muted violet
+    "수면문제": "#8CC0DE",      # iceberg blue
+    "피로감": "#87AAAA",        # blue spruce
+    "상담사 개입": "#96C7C1",   # muted teal
+    "변화/기타": "#C4D7E0",     # pale blue gray
+    "위험": "#D5D3DE",          # misty lavender gray
+    "보호": "#B2C8DF",
+}
+
 CARD_BLUE = "#FFFFFF"
 CARD_BLUE_BORDER = "#E2E8F0"
 TEXT = "#0F172A"
@@ -1277,7 +1806,7 @@ SIDEBAR_BG = "#F1F5F9"
 CHATBOT_ICON_PATH = Path(__file__).resolve().parent / "assets" / "chatbot.png"
 SEND_ICON_PATH = Path(__file__).resolve().parent / "assets" / "send_icon.png"
 MD_ICON_PATH = Path(__file__).resolve().parent / "assets" / "md.png"
-PDF_ICON_PATH = Path(__file__).resolve().parent / "assets" / "pdf Ribbon.png"
+PDF_ICON_PATH = Path(__file__).resolve().parent / "assets" / "PDF Ribbon.png"
 DOCX_ICON_PATH = Path(__file__).resolve().parent / "assets" / "docx.png"
 SEARCH_ICON_PATH = Path(__file__).resolve().parent / "assets" / "search.png"
 PROFILE_ICON_PATH = Path(__file__).resolve().parent / "assets" / "profile.png"
@@ -1300,6 +1829,120 @@ def get_png_data_uri(path: Path) -> str:
 
     return f"data:image/png;base64,{encoded_png}"
 
+def build_download_label(icon_path: Path, fallback_icon: str, text: str) -> str:
+    icon_data_uri = get_png_data_uri(icon_path)
+
+    if icon_data_uri:
+        return f"![icon]({icon_data_uri}) {text}"
+
+    return f"{fallback_icon} {text}"
+
+def make_simple_pdf_report_bytes(report_text: str, title: str = "상담 요약 보고서") -> bytes | None:
+    """
+    WeasyPrint 기반 PDF 생성이 실패할 때 사용하는 ReportLab fallback.
+    한글 출력을 위해 Windows의 Malgun Gothic 또는 Linux의 NotoSansCJK를 우선 탐색한다.
+    """
+    try:
+        from io import BytesIO
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.pdfgen import canvas
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+    except Exception:
+        return None
+
+    font_candidates = [
+        Path("C:/Windows/Fonts/malgun.ttf"),
+        Path("C:/Windows/Fonts/malgunbd.ttf"),
+        Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/System/Library/Fonts/AppleSDGothicNeo.ttc"),
+    ]
+
+    font_name = "Helvetica"
+
+    for font_path in font_candidates:
+        if font_path.exists():
+            try:
+                pdfmetrics.registerFont(TTFont("KoreanFont", str(font_path)))
+                font_name = "KoreanFont"
+                break
+            except Exception:
+                continue
+
+    try:
+        buffer = BytesIO()
+        page_width, page_height = A4
+        c = canvas.Canvas(buffer, pagesize=A4)
+
+        left = 18 * mm
+        right = 18 * mm
+        top = page_height - 20 * mm
+        bottom = 18 * mm
+        usable_width = page_width - left - right
+
+        def draw_wrapped_text(text: str, x: float, y: float, font_size: int = 10, line_height: int = 15):
+            c.setFont(font_name, font_size)
+
+            for raw_line in str(text or "").splitlines():
+                line = raw_line.strip()
+
+                if not line:
+                    y -= line_height
+                    continue
+
+                # 한글 기준 대략적 줄바꿈. ReportLab 기본 stringWidth 계산을 사용.
+                current = ""
+                for char in line:
+                    test = current + char
+                    if c.stringWidth(test, font_name, font_size) > usable_width:
+                        c.drawString(x, y, current)
+                        y -= line_height
+                        current = char
+
+                        if y < bottom:
+                            c.showPage()
+                            c.setFont(font_name, font_size)
+                            y = top
+
+                    else:
+                        current = test
+
+                if current:
+                    c.drawString(x, y, current)
+                    y -= line_height
+
+                if y < bottom:
+                    c.showPage()
+                    c.setFont(font_name, font_size)
+                    y = top
+
+            return y
+
+        c.setFont(font_name, 16)
+        c.drawString(left, top, title)
+
+        y = top - 12 * mm
+        y = draw_wrapped_text(report_text, left, y, font_size=10, line_height=15)
+
+        c.save()
+        buffer.seek(0)
+        return buffer.getvalue()
+
+    except Exception:
+        return None
+
+def build_download_label(icon_path: Path, fallback_icon: str, text: str) -> str:
+    """
+    assets 아이콘이 없으면 깨진 이미지 대신 이모지 fallback을 사용한다.
+    """
+    icon_data_uri = get_png_data_uri(icon_path)
+
+    if icon_data_uri:
+        return f"![icon]({icon_data_uri}) {text}"
+
+    return f"{fallback_icon} {text}"
 
 def apply_global_style():
     chatbot_icon_data_uri = get_svg_data_uri(CHATBOT_ICON_PATH)
@@ -1345,6 +1988,23 @@ def apply_global_style():
             background: var(--sidebar-bg);
             border-right: 1px solid var(--border);
             box-shadow: 8px 0 24px rgba(15, 23, 42, 0.025);
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }}
+
+        section[data-testid="stSidebar"]::-webkit-scrollbar {{
+            display: none !important;
+            width: 0 !important;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {{
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }}
+
+        section[data-testid="stSidebar"] div[data-testid="stSidebarContent"]::-webkit-scrollbar {{
+            display: none !important;
+            width: 0 !important;
         }}
 
         section[data-testid="stSidebar"] .block-container {{
@@ -1354,7 +2014,7 @@ def apply_global_style():
         section[data-testid="stSidebar"] h1 {{
             color: var(--primary-dark);
             font-size: 1.34rem !important;
-            font-weight: 720 !important;
+            font-weight: 600 !important;
             letter-spacing: -0.045em;
             line-height: 1.12;
             margin-bottom: 0.25rem;
@@ -1427,7 +2087,7 @@ def apply_global_style():
         section[data-testid="stSidebar"] label {{
             color: var(--subtext) !important;
             font-size: 0.74rem !important;
-            font-weight: 500 !important;
+            font-weight: 400 !important;
         }}
 
         section[data-testid="stSidebar"] div[data-baseweb="select"] > div {{
@@ -1991,7 +2651,7 @@ def apply_global_style():
         }}
 
         .ai-summary-section {{
-            margin-top: 1.15rem;
+            margin-top: 0.25rem;
         }}
 
         .ai-summary-title {{
@@ -2059,9 +2719,15 @@ def apply_global_style():
         }}
 
         .ai-summary-footnote {{
-            color: var(--subtext);
+            display: flex;
+            align-items: flex-start;
+            gap: 0.48rem;
+            color: #7A7F8C;
             font-size: 0.76rem;
-            margin-top: 0.65rem;
+            font-weight: 400;
+            line-height: 1.48;
+            margin-top: 0.75rem;
+            word-break: keep-all;
         }}
 
         .dashboard-side-note {{
@@ -2070,6 +2736,238 @@ def apply_global_style():
             border-radius: 16px;
             padding: 1rem 1.05rem;
             min-height: 285px;
+        }}
+
+        .hira-detail-title {{
+            color: #0F172A;
+            font-size: 1.50rem;
+            font-weight: 520;
+            letter-spacing: -0.045em;
+            line-height: 2.05;
+            margin: -0.4rem 0 0.28rem;
+        }}
+
+        .hira-detail-desc {{
+            color: #64748B;
+            font-size: 0.9rem;
+            font-weight: 400;
+            line-height: 1.65;
+            margin-bottom: 1rem;
+        }}
+
+        .hira-donut-title {{
+            color: #0F172A;
+            font-size: 0.96rem;
+            font-weight: 620;
+            letter-spacing: -0.025em;
+            margin-bottom: 0.2rem;
+        }}
+
+        .hira-donut-title span {{
+            color: #64748B;
+            font-size: 0.74rem;
+            font-weight: 500;
+        }}
+
+        .hira-highlight-filter-marker {{
+            display: none;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) {{
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: flex-end !important;
+            transform: translateY(-1.5rem) !important;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) label {{
+            color: #0F172A !important;
+            font-size: 0.78rem !important;
+            font-weight: 540 !important;
+            margin-bottom: 0.18rem !important;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) div[data-baseweb="select"] > div {{
+            min-height: 1.95rem !important;
+            height: 1.95rem !important;
+            border-radius: 9px !important;
+            background: #F3F6FA !important;
+            border-color: #E2E8F0 !important;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) div[data-baseweb="select"] span {{
+            font-size: 0.8rem !important;
+            font-weight: 500 !important;
+            color: #0F172A !important;
+        }}
+
+        div[data-testid="column"]:has(.hira-highlight-filter-marker) div[data-baseweb="select"] svg {{
+            width: 0.9rem !important;
+            height: 0.9rem !important;
+        }}
+
+        .hira-kpi-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.72rem;
+            margin-bottom: 1.15rem;
+        }}
+
+        .hira-kpi-card {{
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 14px;
+            padding: 0.82rem 0.9rem;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.035);
+            min-height: 5.2rem;
+        }}
+
+        .hira-kpi-label {{
+            color: #475569;
+            font-size: 0.78rem;
+            font-weight: 500;
+            line-height: 1.35;
+            margin-bottom: 0.45rem;
+        }}
+
+        .hira-kpi-value {{
+            color: #0F172A;
+            font-size: 1.45rem;
+            font-weight: 620;
+            line-height: 1.2;
+            letter-spacing: -0.045em;
+            word-break: keep-all;
+        }}
+
+        .hira-kpi-note {{
+            display: flex;
+            align-items: flex-start;
+            gap: 0.48rem;
+            color: #7A7F8C;
+            font-size: 0.76rem;
+            font-weight: 400;
+            line-height: 1.48;
+            margin-top: 0.35rem;
+            word-break: keep-all;
+        }}
+
+        .hira-kpi-note-icon {{
+            width: 1.05rem;
+            height: 1.05rem;
+            min-width: 1.05rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.68rem;
+            font-weight: 650;
+            line-height: 1;
+            margin-top: 0.16rem;
+        }}
+
+        .dashboard-note-icon {{
+            width: 1.05rem;
+            height: 1.05rem;
+            min-width: 1.05rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.68rem;
+            font-weight: 650;
+            line-height: 1;
+            margin-top: 0.12rem;
+        }}
+
+        .dashboard-note-line {{
+            display: flex;
+            align-items: flex-start;
+            gap: 0.48rem;
+            color: #7A7F8C;
+            font-size: 0.76rem;
+            font-weight: 400;
+            line-height: 1.48;
+            margin-top: 0.45rem;
+            word-break: keep-all;
+        }}
+
+        .report-ai-note {{
+            margin-top: 0.75rem !important;
+            margin-bottom: 0.65rem !important;
+        }}
+
+        .hira-stat-warning-note {{
+            margin-top: 0.55rem !important;
+            margin-bottom: 0.85rem !important;
+        }}
+
+        .hira-interpret-title-row {{
+            display: flex;
+            align-items: center;
+            gap: 0.48rem;
+            margin-bottom: 0.65rem;
+        }}
+
+        .hira-interpret-title-icon {{
+            width: 1.25rem;
+            height: 1.25rem;
+            min-width: 1.25rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.72rem;
+            font-weight: 700;
+            line-height: 1;
+        }}
+
+        .hira-interpret-title {{
+            color: #0F172A;
+            font-size: 0.98rem;
+            font-weight: 560;
+            letter-spacing: -0.025em;
+        }}
+
+        .hira-interpret-card {{
+            color: #334155;
+            font-size: 0.88rem;
+            font-weight: 400;
+            line-height: 1.68;
+            letter-spacing: -0.012em;
+            word-break: keep-all;
+        }}
+
+        .hira-interpret-card p {{
+            margin: 0 0 0.68rem;
+        }}
+
+        .hira-interpret-card p:last-child {{
+            margin-bottom: 0;
+        }}
+
+        .hira-interpret-card strong {{
+            color: #0F172A;
+            font-weight: 620;
+        }}
+
+        .hira-interpret-lead {{
+            color: #1E293B;
+        }}
+
+        .hira-interpret-final {{
+            color: #475569;
+            background: #F8FAFC;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            padding: 0.72rem 0.85rem;
+            margin-top: 0.2rem !important;
+            margin-bottom: 0.65rem !important;
         }}
 
         .dashboard-side-note-title {{
@@ -2129,10 +3027,10 @@ def apply_global_style():
         }}
 
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child {{
-            background: #60A5FA !important;
-            border: 1px solid #60A5FA !important;
+            background: #7DB3F7 !important;
+            border: 1px solid #7DB3F7 !important;
             color: #FFFFFF !important;
-            box-shadow: 0 6px 14px rgba(96, 165, 250, 0.18) !important;
+            box-shadow: 0 6px 14px rgba(125, 179, 247, 0.18) !important;
         }}
 
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child p,
@@ -2190,10 +3088,19 @@ def apply_global_style():
         }}
 
         div[data-testid="stDownloadButton"] > button:first-child img {{
-            width: 1.05rem !important;
-            height: 1.05rem !important;
+            width: 1.08rem !important;
+            height: 1.08rem !important;
             object-fit: contain !important;
             display: inline-block !important;
+            vertical-align: middle !important;
+        }}
+
+        div[data-testid="stDownloadButton"] > button:first-child p {{
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 0.42rem !important;
+            white-space: nowrap !important;
         }}
 
         .report-section-head {{
@@ -2207,6 +3114,41 @@ def apply_global_style():
             color: var(--text);
             font-size: 0.96rem;
             font-weight: 600;
+        }}
+
+        .report-block-header {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.75rem;
+        }}
+
+        .report-block-title {{
+            color: #0F172A;
+            font-size: 0.92rem;
+            font-weight: 650;
+            letter-spacing: -0.025em;
+        }}
+
+        .report-edit-badge {{
+            display: inline-flex;
+            align-items: center;
+            margin-left: 0.45rem;
+            padding: 0.18rem 0.45rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            font-size: 0.7rem;
+            font-weight: 650;
+            line-height: 1;
+        }}
+
+        .report-attached-chart-title {{
+            color: #0F172A;
+            font-size: 0.9rem;
+            font-weight: 620;
+            letter-spacing: -0.025em;
+            margin-bottom: 0.25rem;
         }}
 
         .report-edit-badge {{
@@ -2581,6 +3523,24 @@ def apply_global_style():
 
         .report-preview-section {{
             margin-top: 1.15rem;
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 14px;
+            padding: 1rem 1.05rem;
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.035);
+        }}
+
+        .report-preview-auto-badge {{
+            display: inline-flex;
+            align-items: center;
+            margin-left: 0.45rem;
+            padding: 0.16rem 0.45rem;
+            border-radius: 999px;
+            background: #EFF6FF;
+            color: #2563EB;
+            font-size: 0.68rem;
+            font-weight: 600;
+            vertical-align: middle;
         }}
 
         .report-preview-section-title {{
@@ -2595,9 +3555,11 @@ def apply_global_style():
 
         .report-preview-section-body {{
             color: #0F172A;
-            font-size: 0.88rem;
-            line-height: 1.75;
+            font-size: 0.9rem;
+            line-height: 1.78;
             white-space: pre-wrap;
+            word-break: keep-all;
+            overflow-wrap: anywhere;
         }}
 
         .report-preview-chart-panel {{
@@ -2923,26 +3885,75 @@ def apply_global_style():
             display: none;
         }}
 
+        /* 신규 등록 expander 바깥 기본 박스 제거 */
+        /* 신규 등록 expander 전체 영역 */
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) {{
-            border-radius: 11px;
+            border: none ! important;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.025) ! important;
+            background: rgba(255, 255, 255, 0.34) ! important;
+            border-radius: 10px ! important;
+            padding: 0.1rem !important;
+            margin-bottom: 1rem ! important;
+            overflow: hidden ! important;
         }}
 
+        /* 신규 등록 버튼 본체 */
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary {{
+            height: 2.85rem !important;
+            min-height: 2.85rem !important;
+            padding: 0 1rem !important;
             background: transparent !important;
-            border: 1px solid #CBD5E1 !important;
+            border: 1.6px solid #CBD5E1 !important;
+            border-radius: 8px !important;
+            box-shadow: none !important;
             color: #0F172A !important;
             display: flex !important;
             align-items: center !important;
+            justify-content: space-between !important;
+            font-size: 0.95rem !important;
+            font-weight: 520 !important;
+            letter-spacing: -0.025em !important;
         }}
 
+        /* Streamlit expander 기본 테두리/배경 겹침 방지 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary > div {{
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+        }}
+
+        /* hover 상태 */
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:hover {{
-            background: rgba(255, 255, 255, 0.34) !important;
-            border-color: #CBD5E1 !important;
+            background: rgba(255, 255, 255, 0.38) !important;
+            border-color: #94A3B8 !important;
             color: #0F172A !important;
         }}
 
+        /* 신규 등록 텍스트 */
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary p,
         section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary span {{
+            color: #0F172A !important;
+            font-size: 0.80rem !important;
+            font-weight: 400 !important;
+            letter-spacing: -0.025em !important;
+        }}
+
+        /* expander 화살표 위치 안정화 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary svg {{
+            color: #0F172A !important;
+        }}
+
+        /* 신규 등록 텍스트 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary p,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary span {{
+            color: #0F172A !important;
+            font-size: 0.85rem !important;
+            font-weight: 400 !important;
+            letter-spacing: -0.025em !important;
+        }}
+
+        /* expander 화살표 위치 안정화 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary svg {{
             color: #0F172A !important;
         }}
 
@@ -3133,10 +4144,16 @@ def apply_global_style():
         }}
 
         textarea:focus,
-        input:focus,
-        div[data-baseweb="select"]:focus-within {{
+        input:focus {{
             border-color: var(--primary) !important;
-            box-shadow: 0 0 0 1px var(--primary) !important;
+            box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.18) !important;
+            outline: none !important;
+        }}
+
+        div[data-baseweb="select"]:focus-within {{
+            border-color: #93C5FD !important;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12) !important;
+            outline: none !important;
         }}
 
         @media (max-width: 1100px) {{
@@ -3199,9 +4216,10 @@ def apply_global_style():
             min-width: 4.2rem !important;
             min-height: 2.25rem !important;
             height: 2.25rem !important;
+            max-height: 2.25rem !important;
             border-radius: 9999px !important;
             padding: 0 1.05rem !important;
-            font-size: 0.92rem !important;
+            font-size: 0.88rem !important;
             font-weight: 520 !important;
             line-height: 1 !important;
             white-space: nowrap !important;
@@ -3212,7 +4230,7 @@ def apply_global_style():
 
         div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child p,
         div[data-testid="column"]:has(.factor-category-marker) div.stButton > button:first-child span {{
-            font-size: 0.92rem !important;
+            font-size: 0.88rem !important;
             font-weight: 520 !important;
             line-height: 1 !important;
             margin: 0 !important;
@@ -3220,38 +4238,53 @@ def apply_global_style():
             width: auto !important;
             text-align: center !important;
         }}
-
+        
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child {{
-            background: #60A5FA !important;
-            border-color: #60A5FA !important;
+            background: #2563EB !important;
+            border-color: #2563EB !important;
             color: #FFFFFF !important;
-            box-shadow: 0 6px 14px rgba(96, 165, 250, 0.18) !important;
+            box-shadow: 0 6px 14px rgba(37, 99, 235, 0.18) !important;
         }}
 
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child p,
         div[data-testid="column"]:has(.factor-category-is-selected) div.stButton > button:first-child span {{
             color: #FFFFFF !important;
+            font-size: 0.88rem !important;
+            font-weight: 520 !important;
         }}
 
         div[data-testid="column"]:has(.factor-category-is-unselected) div.stButton > button:first-child {{
             background: #FFFFFF !important;
             border-color: #E5E7EB !important;
             color: #0F172A !important;
+            min-height: 2.25rem !important;
+            height: 2.25rem !important;
+            max-height: 2.25rem !important;
+            font-size: 0.88rem !important;
+            font-weight: 520 !important;
         }}
 
         div[data-testid="column"]:has(.factor-category-is-unselected) div.stButton > button:first-child:hover {{
             background: #EFF6FF !important;
             border-color: #93C5FD !important;
             color: #2563EB !important;
+            min-height: 2.25rem !important;
+            height: 2.25rem !important;
+            max-height: 2.25rem !important;
+            font-size: 0.88rem !important;
+            font-weight: 520 !important;
         }}
 
         button[data-testid="stBaseButton-pills"],
         button[data-testid="stBaseButton-pillsActive"] {{
             border-radius: 9999px !important;
-            min-height: 2.35rem !important;
-            padding: 0 1.12rem !important;
-            font-size: 0.95rem !important;
+            min-height: 2.25rem !important;
+            height: 2.25rem !important;
+            max-height: 2.25rem !important;
+            padding: 0 1.05rem !important;
+            font-size: 0.88rem !important;
             font-weight: 520 !important;
+            line-height: 1 !important;
             box-shadow: none !important;
         }}
 
@@ -3268,10 +4301,10 @@ def apply_global_style():
         }}
 
         button[data-testid="stBaseButton-pillsActive"] {{
-            background: #3B82F6 !important;
-            border: 1px solid #3B82F6 !important;
+            background: #2563EB !important;
+            border: 1px solid #2563EB !important;
             color: #FFFFFF !important;
-            box-shadow: 0 6px 14px rgba(59, 130, 246, 0.22) !important;
+            box-shadow: 0 6px 14px rgba(37, 99, 235, 0.20) !important;
         }}
 
         button[data-testid="stBaseButton-pillsActive"] p,
@@ -3474,6 +4507,75 @@ def apply_global_style():
             margin-top: 0 !important;
         }}
 
+        .chat-answer-intro {{
+                background: #F8FAFC;
+                border: 1px solid #E2E8F0;
+                border-radius: 1rem;
+                padding: 0.9rem 1rem;
+                margin-bottom: 0.85rem;
+                color: #334155;
+                font-size: 0.95rem;
+                line-height: 1.75;
+            }}
+
+            .chat-answer-card {{
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 1rem;
+                padding: 1rem;
+                box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+            }}
+
+            .chat-answer-body {{
+                color: #1E293B;
+                font-size: 0.95rem;
+                line-height: 1.8;
+                word-break: keep-all;
+                overflow-wrap: anywhere;
+            }}
+
+            .chat-answer-section {{
+                background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+                border: 1px solid #E2E8F0;
+                border-radius: 1rem;
+                padding: 1rem 1.05rem;
+                margin: 0.85rem 0;
+                box-shadow: 0 8px 22px rgba(15, 23, 42, 0.035);
+            }}
+
+            .chat-answer-section-title {{
+                display: flex;
+                align-items: center;
+                gap: 0.55rem;
+                color: #0F172A;
+                font-weight: 800;
+                font-size: 1.02rem;
+                margin-bottom: 0.65rem;
+            }}
+
+            .chat-answer-section-number {{
+                display: inline-flex;
+                width: 1.65rem;
+                height: 1.65rem;
+                align-items: center;
+                justify-content: center;
+                border-radius: 999px;
+                background: #EEF3FF;
+                color: #4F6EF7;
+                font-size: 0.82rem;
+                font-weight: 800;
+                flex: 0 0 auto;
+            }}
+
+            .chat-answer-section-body {{
+                color: #334155;
+                font-size: 0.94rem;
+                line-height: 1.78;
+                word-break: keep-all;
+                overflow-wrap: anywhere;
+            }}
+
+
         /* 공통 챗봇 이동 버튼 */
         .chatbot-nav-button-marker {{
             display: none;
@@ -3482,10 +4584,36 @@ def apply_global_style():
         div[data-testid="column"]:has(.chatbot-nav-button-marker) {{
             display: flex !important;
             justify-content: flex-end !important;
+            align-items: flex-start !important;
+            padding-right: 0 !important;
+        }}
+
+        .st-key-dashboard_chatbot_fab,
+        .st-key-session_detail_chatbot_button {{
+            width: 100% !important;
+            display: flex !important;
+            justify-content: flex-end !important;
         }}
 
         .st-key-dashboard_chatbot_fab {{
-            transform: translateY(-1.35rem) !important;
+            transform: translateY(-0.65rem) !important;
+        }}
+
+        .st-key-session_detail_chatbot_button {{
+            transform: translateY(0rem) !important;
+        }}
+
+        .st-key-dashboard_chatbot_fab div.stButton,
+        .st-key-session_detail_chatbot_button div.stButton {{
+            width: auto !important;
+            display: flex !important;
+            justify-content: flex-end !important;
+        }}
+
+        .st-key-dashboard_chatbot_fab div.stButton {{
+            width: auto !important;
+            display: flex !important;
+            justify-content: flex-end !important;
         }}
 
         div[data-testid="column"]:has(.chatbot-nav-button-marker) div.stButton > button:first-child,
@@ -3539,8 +4667,8 @@ def apply_global_style():
             object-fit: contain !important;
             display: block !important;
             filter: brightness(0) invert(1) !important;
-        }}      
-
+        }}   
+           
         /* =========================================================
            내담자 홈 리디자인: 알약 탭 + 상담 요약 카드
         ========================================================= */
@@ -3930,6 +5058,161 @@ def apply_global_style():
             text-align: left !important;
     }}
 
+        /* Streamlit 버튼 hover/focus/active 주황색 제거 */
+        div[data-testid="stButton"] > button,
+        div[data-testid="stDownloadButton"] > button {{
+            border-color: #CBD5E1 !important;
+            color: #0F172A !important;
+            box-shadow: none !important;
+        }}
+
+        div[data-testid="stButton"] > button:hover,
+        div[data-testid="stDownloadButton"] > button:hover {{
+            border-color: #93C5FD !important;
+            color: #2563EB !important;
+            background: #F8FBFF !important;
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.08) !important;
+        }}
+
+        div[data-testid="stButton"] > button:focus,
+        div[data-testid="stButton"] > button:focus-visible,
+        div[data-testid="stDownloadButton"] > button:focus,
+        div[data-testid="stDownloadButton"] > button:focus-visible {{
+            border-color: #3B82F6 !important;
+            color: #2563EB !important;
+            background: #F8FBFF !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16) !important;
+            outline: none !important;
+        }}
+
+        div[data-testid="stButton"] > button:active,
+        div[data-testid="stDownloadButton"] > button:active {{
+            border-color: #2563EB !important;
+            color: #1D4ED8 !important;
+            background: #EFF6FF !important;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14) !important;
+        }}
+
+        div[data-testid="stButton"] > button:focus:not(:focus-visible),
+        div[data-testid="stDownloadButton"] > button:focus:not(:focus-visible) {{
+            outline: none !important;
+        }}
+
+        /* =====================================================
+           Streamlit 기본 주황/빨강 focus 색상 제거 → 파란 계열 통일
+        ===================================================== */
+
+        /* 1) 검색 input focus 테두리 */
+        section[data-testid="stSidebar"] div[data-baseweb="input"] {{
+            border-color: #E2E8F0 !important;
+            box-shadow: none !important;
+        }}
+
+        section[data-testid="stSidebar"] div[data-baseweb="input"]:focus-within {{
+            border-color: #93C5FD !important;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.16) !important;
+            outline: none !important;
+        }}
+
+        section[data-testid="stSidebar"] input:focus,
+        section[data-testid="stSidebar"] input:focus-visible {{
+            outline: none !important;
+            box-shadow: none !important;
+            border-color: transparent !important;
+        }}
+
+
+        /* 2) 신규 등록 expander hover/focus/active 색상 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:hover,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:focus,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:focus-visible,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:active {{
+            background: #F8FBFF !important;
+            border-color: #93C5FD !important;
+            color: #0F172A !important;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14) !important;
+            outline: none !important;
+        }}
+
+
+
+        /* 3) 일반 버튼 / 다운로드 버튼 focus-visible 주황색 제거 */
+        div[data-testid="stButton"] > button:hover,
+        div[data-testid="stDownloadButton"] > button:hover {{
+            border-color: #93C5FD !important;
+            color: #2563EB !important;
+            background: #F8FBFF !important;
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.08) !important;
+            outline: none !important;
+        }}
+
+        div[data-testid="stButton"] > button:focus,
+        div[data-testid="stButton"] > button:focus-visible,
+        div[data-testid="stButton"] > button:active,
+        div[data-testid="stDownloadButton"] > button:focus,
+        div[data-testid="stDownloadButton"] > button:focus-visible,
+        div[data-testid="stDownloadButton"] > button:active {{
+            border-color: #3B82F6 !important;
+            color: #2563EB !important;
+            background: #F8FBFF !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16) !important;
+            outline: none !important;
+        }}
+
+        /* 4) Streamlit 기본 focus outline 사각형 제거 */
+        button:focus,
+        button:focus-visible,
+        input:focus,
+        input:focus-visible,
+        summary:focus,
+        summary:focus-visible,
+        div[data-baseweb="select"]:focus,
+        div[data-baseweb="select"]:focus-visible,
+        div[data-baseweb="select"]:focus-within {{
+            outline: none !important;
+        }}
+
+        /* selectbox 내부 input 때문에 생기는 파란 사각형 제거 */
+        div[data-baseweb="select"] input,
+        div[data-baseweb="select"] input:focus,
+        div[data-baseweb="select"] input:focus-visible {{
+            outline: none !important;
+            box-shadow: none !important;
+            border: none !important;
+        }}
+
+        /* 신규 등록 expander 클릭 시 화살표 주변 focus 사각형 제거 */
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:focus,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:focus-visible,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary:active {{
+            outline: none !important;
+        }}
+
+
+
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary [data-testid],
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary [data-testid]:focus,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary [data-testid]:focus-visible,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary [data-testid]:active {{
+            outline: none !important;
+            box-shadow: none !important;
+            border: none !important;
+            background: transparent !important;
+        }}
+
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button:hover,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button:focus,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button:focus-visible,
+        section[data-testid="stSidebar"] details:has(.new-client-expander-marker) summary button:active {{
+            outline: none !important;
+            box-shadow: none !important;
+            border: none !important;
+            background: transparent !important;
+            color: #0F172A !important;
+        }}
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -3944,7 +5227,7 @@ def render_sidebar():
         st.markdown(
             """
             <div class="sidebar-brand">CounsHelper</div>
-            <div class="sidebar-subtitle">상담 분석·보고서 자동화</div>
+            <div class="sidebar-subtitle">심리상담사 AI 보조 플랫폼</div>
             """,
             unsafe_allow_html=True,
         )
@@ -4107,7 +5390,7 @@ def render_sidebar():
                 go_page(page_name)
                 st.rerun()
 
-        st.markdown("<div style='height: 3.8rem;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height: 4.0rem;'></div>", unsafe_allow_html=True)
 
         profile_icon_data_uri = get_png_data_uri(PROFILE_ICON_PATH)        
         st.markdown(
@@ -4117,7 +5400,7 @@ def render_sidebar():
                     <img src="{profile_icon_data_uri}" alt="profile" />
                 </div>
                 <div class="sidebar-user-info">
-                    <div class="sidebar-user-name">상담심리사</div>
+                    <div class="sidebar-user-name">오은영의 데이터 상담소</div>
                     <div class="sidebar-user-role">MVP Demo</div>
                 </div>
             </div>
@@ -4522,7 +5805,6 @@ def render_patient_home():
         default=st.session_state.get("patient_home_tab", "내담자 정보"),
         key="patient_home_tab_pills",
         label_visibility="collapsed",
-        width="content",
     )
 
     if active_tab is None:
@@ -4651,14 +5933,13 @@ def render_session_detail():
     journal_id = _get_journal_id(client_id, session_name, session_row)
     counseling_type = str(client_row.get("상담 유형", "상담"))
 
-    title_col, list_col, dashboard_col, chatbot_col = st.columns(
-        [0.58, 0.13, 0.17, 0.06],
+    title_col, spacer_col, list_col, dashboard_col, chatbot_col = st.columns(
+        [0.50, 0.14, 0.13, 0.17, 0.06],
         vertical_alignment="center",
     )
 
     with title_col:
         st.markdown('<div class="patient-title">상담일지 열람</div>', unsafe_allow_html=True)
-  
 
     with list_col:
         st.markdown('<span class="session-detail-list-button-marker"></span>', unsafe_allow_html=True)
@@ -4682,12 +5963,12 @@ def render_session_detail():
         if st.button(
             chatbot_icon_label,
             key="session_detail_chatbot_button",
-            use_container_width=True,
+            use_container_width=False,
             help="챗봇으로 이동",
         ):
             go_page("챗봇")
             st.rerun()
-
+            
     st.markdown(
         f"""
         <div class="session-detail-header">
@@ -4823,7 +6104,6 @@ def render_new_session_form():
             default=st.session_state.get("new_session_input_mode", "발화 단위 입력"),
             key="new_session_input_mode_pills",
             label_visibility="collapsed",
-            width="content",
         )
 
         if input_mode is None:
@@ -5332,7 +6612,7 @@ def render_top_risk_cards(classification: Dict[str, int], factors: Dict[str, int
 """
 
     st.markdown(
-        f"""<div class="home-summary-grid">
+        f"""<div class="home-summary-grid" style="margin-top:0.55rem;">
 {cards_html}
 </div>""",
         unsafe_allow_html=True,
@@ -5526,10 +6806,13 @@ def render_hira_report_sentence_card(
         include_negative=include_negative,
     )
 
-    st.markdown("### 증상별 입내원정보")
-    st.caption(
-        "건강보험심사평가원_시군구별 성별 연령별 주요 정신질환 통계 2024 기준입니다. "
-        "기본적으로 KlueBERT 양성 항목만 표시합니다."
+    st.markdown(
+        '<div class="chart-panel-title">증상별 입내원정보</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="chart-panel-desc">건강보험심사평가원_시군구별 성별 연령별 주요 정신질환 통계 2024 기준입니다. 기본적으로 KlueBERT 양성 항목만 표시합니다.</div>',
+        unsafe_allow_html=True,
     )
 
     if summary_df.empty:
@@ -5556,18 +6839,36 @@ def render_hira_report_sentence_card(
         is_positive = row.get("판별상태") == "양성"
         is_high = float(patients or 0) >= float(max_patients or 0)
 
-        if is_positive and is_high:
-            bg = "#EFF6FF"
-            border = "#93C5FD"
-            title_color = "#1D4ED8"
-        elif is_positive:
-            bg = "#F5F3FF"
-            border = "#C4B5FD"
-            title_color = "#6D28D9"
+        is_positive = row.get("판별상태") == "양성"
+        context_key = str(row.get("context_key", "")).strip()
+        theme = get_context_theme(context_key)
+
+        if is_positive:
+            if context_key == "depression":
+                bg = "linear-gradient(180deg, #F7FAFF 0%, #FFFFFF 100%)"
+                border = "#BFD0FF"
+                title_color = "#2F4ED8"
+                value_color = "#2F4ED8"
+            elif context_key == "anxiety":
+                bg = "linear-gradient(180deg, #FBF8FF 0%, #FFFFFF 100%)"
+                border = "#E3D6FF"
+                title_color = "#7B57D1"
+                value_color = "#7B57D1"
+            elif context_key == "addiction":
+                bg = "linear-gradient(180deg, #F7FDFF 0%, #FFFFFF 100%)"
+                border = "#C8F2F7"
+                title_color = "#1989A3"
+                value_color = "#1989A3"
+            else:
+                bg = "linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%)"
+                border = "#D8E2EF"
+                title_color = "#475569"
+                value_color = "#334155"
         else:
-            bg = "#F8FAFC"
-            border = "#CBD5E1"
+            bg = "linear-gradient(180deg, #FAFBFD 0%, #FFFFFF 100%)"
+            border = "#D8E2EF"
             title_color = "#475569"
+            value_color = "#334155"
 
         with col:
             st.markdown(
@@ -5576,14 +6877,14 @@ def render_hira_report_sentence_card(
                     background:{bg};
                     border:1px solid {border};
                     border-radius:1.15rem;
-                    padding:1rem 1.05rem;
-                    min-height:260px;
+                    padding:0.95rem 1rem;
+                    min-height:245px;
                     box-shadow:0 8px 20px rgba(15,23,42,0.05);
                 ">
-                    <div style="font-size:0.78rem; font-weight:700; color:{title_color}; margin-bottom:0.35rem;">
+                    <div style="font-size:0.78rem; font-weight:560; color:{title_color}; margin-bottom:0.35rem;">
                         {row.get("판별상태", "")} 항목
                     </div>
-                    <div style="font-size:1.08rem; font-weight:780; color:#0F172A; margin-bottom:0.25rem;">
+                    <div style="font-size:1.00rem; font-weight:650; color:#0F172A; margin-bottom:0.25rem;">
                         {row.get("disease", "질환명 없음")}
                     </div>
                     <div style="font-size:0.8rem; color:#64748B; margin-bottom:0.9rem;">
@@ -5591,22 +6892,22 @@ def render_hira_report_sentence_card(
                     </div>
                     <div style="border-top:1px solid {border}; padding-top:0.75rem;">
                         <div style="font-size:0.76rem; color:#64748B;">환자수</div>
-                        <div style="font-size:1.5rem; font-weight:800; color:#0F172A;">
+                        <div style="font-size:1.3rem; font-weight:700; color:{value_color};">
                             {format_number(patients, "명")}
                         </div>
                         <div style="height:0.65rem;"></div>
                         <div style="font-size:0.76rem; color:#64748B;">입내원일수</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:#334155;">
+                        <div style="font-size:1.05rem; font-weight:650; color:{value_color};">
                             {format_number(visit_days, "일")}
                         </div>
                         <div style="height:0.65rem;"></div>
                         <div style="font-size:0.76rem; color:#64748B;">1인당 평균 입내원일수</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:#334155;">
+                        <div style="font-size:1.05rem; font-weight:650; color:{value_color};">
                             {format_float(visit_days_per_patient, "일")}
                         </div>
                         <div style="height:0.65rem;"></div>
                         <div style="font-size:0.76rem; color:#64748B;">1인당 평균 요양급여비용</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:#334155;">
+                        <div style="font-size:1.05rem; font-weight:650; color:{value_color};">
                             {format_money(cost_per_patient)}
                         </div>
                     </div>
@@ -5615,9 +6916,16 @@ def render_hira_report_sentence_card(
                 unsafe_allow_html=True,
             )
 
-    st.caption(
-        "주의: 위 통계는 요양기관 소재지 기준의 공공 진료 통계이며, "
-        "개별 내담자의 진단, 중증도, 위험도 판단 근거로 사용하지 않습니다."
+    st.markdown(
+        """
+        <div class="dashboard-note-line hira-stat-warning-note">
+            <span class="dashboard-note-icon">i</span>
+            <span>
+                주의: 위 통계는 요양기관 소재지 기준의 공공 진료 통계이며, 개별 내담자의 진단, 중증도, 위험도 판단 근거로 사용하지 않습니다.
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 def render_same_group_disease_chart(
@@ -5629,8 +6937,14 @@ def render_same_group_disease_chart(
     현재 선택된 내담자와 같은 성별·연령대의 주요 정신질환 환자수를 비교한다.
     """
 
-    st.markdown("#### 같은 성별·연령대 주요 정신질환 진료 현황")
-    st.caption("내담자와 같은 성별·연령대의 주요 정신질환 진료 환자수를 비교합니다.")
+    st.markdown(
+        '<div class="chart-panel-title">같은 성별·연령대 주요 정신질환 진료 현황</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="chart-panel-desc">내담자와 같은 성별·연령대의 주요 정신질환 진료 환자수를 비교합니다.</div>',
+        unsafe_allow_html=True,
+    )
 
     hira_df = load_hira_model_context().copy()
     client_row = get_client_row()
@@ -5705,24 +7019,57 @@ def render_same_group_disease_chart(
         x="disease",
         y="patients",
         text="patients",
-        height=340,
+        height=370,
+        color_discrete_sequence=["#6B8EF7"],
     )
 
     fig.update_traces(
         texttemplate="%{text:,}",
         textposition="outside",
         marker_line_width=0,
+        width=0.58,
+        textfont=dict(
+            size=11,
+            color="#64748B",
+            family='-apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", sans-serif',
+        ),
+        cliponaxis=False,
     )
 
     fig.update_layout(
+        margin=dict(l=18, r=18, t=24, b=28),
         xaxis_title="질환",
         yaxis_title="환자수",
-        margin=dict(l=10, r=10, t=20, b=10),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
+        bargap=0.34,
+        showlegend=False,
+        plot_bgcolor="#FFFFFF",
+        paper_bgcolor="#FFFFFF",
+        font=dict(
+            color="#64748B",
+            size=11,
+            family='-apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", sans-serif',
+        ),
+        xaxis=dict(
+            tickfont=dict(size=11, color="#64748B"),
+            title_font=dict(size=12, color="#64748B"),
+            showgrid=False,
+            zeroline=False,
+            linecolor="#E2E8F0",
+        ),
+        yaxis=dict(
+            tickfont=dict(size=11, color="#64748B"),
+            title_font=dict(size=12, color="#64748B"),
+            showgrid=True,
+            gridcolor="#E5EAF2",
+            zeroline=False,
+        ),
     )
 
-    st.plotly_chart(fig, use_container_width=True, key="same_group_disease_chart_restored")
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="same_group_disease_chart",
+    )
 
     st.caption(
         f"현재 비교 기준: {age_group} {gender}. "
@@ -5795,31 +7142,72 @@ def _filter_hira_by_context(context_key: str) -> pd.DataFrame:
     return hira_df[hira_df["disease"].str.contains(pattern, na=False)].copy()
 
 
+def format_compact_korean_number(value: Any, suffix: str = "") -> str:
+    numeric_value = pd.to_numeric(value, errors="coerce")
+
+    if pd.isna(numeric_value):
+        numeric_value = 0
+
+    numeric_value = float(numeric_value)
+
+    if abs(numeric_value) >= 10000:
+        unit = f"만{suffix}" if suffix else "만"
+        return f"{numeric_value / 10000:.1f}{unit}"
+
+    if suffix == "원":
+        return f"{numeric_value:,.0f}원"
+
+    if suffix in ["명", "일"]:
+        if float(numeric_value).is_integer():
+            return f"{numeric_value:,.0f}{suffix}"
+        return f"{numeric_value:,.2f}{suffix}"
+
+    if suffix:
+        return f"{numeric_value:,.2f}{suffix}"
+
+    return f"{numeric_value:,.0f}"
+
+
 def render_hira_donut_chart(
     df: pd.DataFrame,
     names_col: str,
     values_col: str,
     title: str,
     key: str,
-    top_n: int = 6,
+    top_n: int | None = 10,
     highlight_value: str = "전체",
+    show_top_note: bool = True,
 ):
     """
     지역/성별/연령대 분포 도넛차트 공통 함수.
 
-    highlight_value가 '전체'가 아니면 해당 조각을 바깥으로 살짝 빼고,
-    라인 두께를 키워 선택 상태를 강조한다.
+    동작:
+    - 전체 통계에서 범주별 환자수를 집계
+    - top_n이 있으면 상위 N개만 표시
+    - highlight_value가 있으면 해당 조각에 네온 테두리 강조
+    - 성별처럼 top 표기가 불필요한 경우 show_top_note=False로 처리
     """
     if df.empty or names_col not in df.columns or values_col not in df.columns:
         st.info(f"{title} 데이터를 찾지 못했습니다.")
         return
 
-    chart_df = (
-        df.groupby(names_col, as_index=False)[values_col]
+    clean_df = df.copy()
+    clean_df[names_col] = clean_df[names_col].astype(str).str.strip()
+    clean_df[values_col] = pd.to_numeric(clean_df[values_col], errors="coerce").fillna(0)
+
+    invalid_values = ["", "nan", "None", "none", "undefined", "Undefined", "NaN"]
+    clean_df = clean_df[~clean_df[names_col].isin(invalid_values)]
+
+    full_chart_df = (
+        clean_df.groupby(names_col, as_index=False)[values_col]
         .sum()
         .sort_values(values_col, ascending=False)
-        .head(top_n)
     )
+
+    if top_n is not None:
+        chart_df = full_chart_df.head(top_n).copy()
+    else:
+        chart_df = full_chart_df.copy()
 
     if chart_df.empty or chart_df[values_col].sum() == 0:
         st.info(f"{title} 데이터를 표시할 수 없습니다.")
@@ -5827,13 +7215,21 @@ def render_hira_donut_chart(
 
     labels = chart_df[names_col].astype(str).tolist()
 
+    highlight_text = str(highlight_value or "전체").strip()
+
     pull_values = [
-        0.12 if highlight_value != "전체" and str(label) == str(highlight_value) else 0
+        0.055 if highlight_text != "전체" and str(label) == highlight_text else 0
         for label in labels
     ]
 
     line_widths = [
-        4 if highlight_value != "전체" and str(label) == str(highlight_value) else 1
+        3 if highlight_text != "전체" and str(label) == highlight_text else 1
+        for label in labels
+    ]
+
+    # 선택 조각은 과하게 튀지 않도록 연한 반투명 민트 테두리로 강조
+    line_colors = [
+        "rgba(37, 99, 235, 0.38)" if highlight_text != "전체" and str(label) == highlight_text else "rgba(255, 255, 255, 0.95)"
         for label in labels
     ]
 
@@ -5841,17 +7237,20 @@ def render_hira_donut_chart(
         chart_df,
         names=names_col,
         values=values_col,
-        hole=0.62,
-        height=260,
+        hole=0.66,
+        height=300,
+        color_discrete_sequence=DONUT_PALETTE,
     )
 
     fig.update_traces(
+        name="",
         textposition="inside",
-        textinfo="percent",
+        texttemplate="%{percent}",
+        textfont=dict(size=9, color="#334155"),
         pull=pull_values,
         marker=dict(
             line=dict(
-                color="white",
+                color=line_colors,
                 width=line_widths,
             )
         ),
@@ -5860,22 +7259,31 @@ def render_hira_donut_chart(
 
     fig.update_layout(
         title=None,
-        margin=dict(l=5, r=5, t=10, b=5),
+        title_text="",
+        margin=dict(l=0, r=0, t=0, b=66),
         showlegend=True,
+        legend_title_text="",
         legend=dict(
             orientation="h",
-            yanchor="bottom",
-            y=-0.25,
+            yanchor="top",
+            y=-0.12,
             xanchor="center",
             x=0.5,
+            font=dict(size=9, color="#475569"),
+            itemwidth=38,
         ),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
     )
 
-    st.markdown(f"**{title}**")
-
-    if highlight_value != "전체":
-        st.caption(f"선택 강조: {highlight_value}")
-
+    if show_top_note and top_n is not None:
+        st.markdown(
+            f"<div class='hira-donut-title'>{html_escape(title)} <span>(Top {min(top_n, len(chart_df))})</span></div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(f"<div class='hira-donut-title'>{html_escape(title)}</div>", unsafe_allow_html=True)
+        
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 def build_context_factor_treemap_df(
@@ -5958,34 +7366,71 @@ def render_hira_context_detail_section(
     if context_df.empty:
         st.info(f"{label} 관련 HIRA 데이터를 찾지 못했습니다.")
         return
-
-    st.markdown(f"### [{label}] 관련 공공통계 상세")
-    st.caption(
-        f"{label} 관련 질환의 HIRA 2024 분포와 현재 상담 기록의 28요인 구성을 함께 확인합니다."
+        
+    # 지역은 환자수 기준 Top10 안에서 선택
+    sido_top10 = (
+        context_df.groupby("sido", as_index=False)["patients"]
+        .sum()
+        .sort_values("patients", ascending=False)
+        .head(10)["sido"]
+        .astype(str)
+        .tolist()
     )
 
-    # =====================================================
-    # 1행: 필터는 '하이라이트 선택' 용도
-    # =====================================================
-    d1, d2, d3, filter_col = st.columns([0.24, 0.24, 0.24, 0.28], gap="medium")
+    sido_options = ["전체"] + sido_top10
 
-    with filter_col:
-        st.markdown("**하이라이트 필터**")
-        st.caption("선택한 지역·연령대가 왼쪽 도넛차트에서 강조 표시됩니다.")
+    # 연령대는 환자수 기준 Top6 안에서 선택
+    age_top6 = (
+        context_df.groupby("age_group", as_index=False)["patients"]
+        .sum()
+        .sort_values("patients", ascending=False)
+        .head(6)["age_group"]
+        .astype(str)
+        .tolist()
+    )
 
-        sido_options = ["전체"] + sorted(context_df["sido"].dropna().unique().tolist())
+    age_options = ["전체"] + age_top6
+
+    title_col, filter_sido_col, filter_age_col = st.columns(
+        [0.70, 0.15, 0.15],
+        gap="small",
+        vertical_alignment="bottom",
+    )
+
+    with title_col:
+        st.markdown(
+            f"<div class='hira-detail-title'>{html_escape(label)} 관련 공공통계 상세 정보</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<div class='hira-detail-desc'>{html_escape(label)} 관련 질환의 HIRA 2024 분포와 현재 상담 기록의 28요인 구성을 함께 확인합니다.</div>",
+            unsafe_allow_html=True,
+        )
+
+    with filter_sido_col:
+        st.markdown('<span class="hira-highlight-filter-marker"></span>', unsafe_allow_html=True)
         selected_sido = st.selectbox(
             "지역",
             options=sido_options,
             key=f"{context_key}_detail_sido_highlight",
         )
 
-        age_options = ["전체"] + sorted(context_df["age_group"].dropna().unique().tolist())
+    with filter_age_col:
+        st.markdown('<span class="hira-highlight-filter-marker"></span>', unsafe_allow_html=True)
         selected_age = st.selectbox(
             "연령",
             options=age_options,
             key=f"{context_key}_detail_age_highlight",
         )
+
+    client_gender, client_age_group = _get_client_hira_filter_values()
+
+    st.markdown("<div style='height:0.15rem;'></div>", unsafe_allow_html=True)
+
+    # =====================================================
+    # 2행: 도넛 차트 3개를 전체 폭 기준으로 균등 배치
+    # =====================================================
+    d1, d2, d3 = st.columns(3, gap="medium")
 
     with d1:
         render_hira_donut_chart(
@@ -5994,7 +7439,9 @@ def render_hira_context_detail_section(
             values_col="patients",
             title="지역",
             key=f"{context_key}_sido_donut",
+            top_n=10,
             highlight_value=selected_sido,
+            show_top_note=True,
         )
 
     with d2:
@@ -6004,7 +7451,9 @@ def render_hira_context_detail_section(
             values_col="patients",
             title="성별",
             key=f"{context_key}_gender_donut",
+            top_n=None,
             highlight_value="전체",
+            show_top_note=False,
         )
 
     with d3:
@@ -6014,7 +7463,9 @@ def render_hira_context_detail_section(
             values_col="patients",
             title="연령대",
             key=f"{context_key}_age_donut",
+            top_n=6,
             highlight_value=selected_age,
+            show_top_note=True,
         )
 
     st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
@@ -6022,11 +7473,11 @@ def render_hira_context_detail_section(
     # =====================================================
     # 2행: 28요인 트리맵 + 공공통계
     # =====================================================
-    tree_col, stat_col = st.columns([0.55, 0.45], gap="large")
+    tree_col, stat_col = st.columns([0.57, 0.43], gap="medium")
 
     with tree_col:
         with st.container(border=True):
-            st.markdown(f"#### {label} 관련 28요인 구성")
+            st.markdown(f"<div class='chart-panel-title'>{html_escape(label)} 관련 28요인 구성</div>", unsafe_allow_html=True)
             st.caption("현재 상담 기록에서 추출된 28요인 점수를 기준으로 표시합니다.")
 
             tree_df = build_context_factor_treemap_df(
@@ -6037,21 +7488,102 @@ def render_hira_context_detail_section(
             if tree_df.empty:
                 st.info(f"현재 상담 기록에서 0점보다 큰 {label} 관련 28요인이 없습니다.")
             else:
-                fig_tree = px.treemap(
-                    tree_df,
-                    path=["분류", "카테고리", "요인"],
-                    values="값",
-                    color="값",
-                    height=330,
+                theme = get_context_theme(context_key)
+                treemap_palette = {
+                    "depression": {
+                        "root": "#EFF6FF",
+                        "category": "#DBEAFE",
+                        "leaf": {
+                            1: "#EAF2FF",
+                            2: "#BFDBFE",
+                            3: "#93C5FD",
+                        },
+                    },
+                    "anxiety": {
+                        "root": "#F5F3FF",
+                        "category": "#EDE9FE",
+                        "leaf": {
+                            1: "#F5F3FF",
+                            2: "#DDD6FE",
+                            3: "#C4B5FD",
+                        },
+                    },
+                    "addiction": {
+                        "root": "#ECFEFF",
+                        "category": "#CCFBF1",
+                        "leaf": {
+                            1: "#ECFEFF",
+                            2: "#99F6E4",
+                            3: "#5EEAD4",
+                        },
+                    },
+                }.get(context_key, {})
+
+                root_label = _get_context_label(context_key)
+
+                labels = [root_label]
+                ids = [root_label]
+                parents = [""]
+                values = [int(tree_df["값"].sum())]
+                colors = [treemap_palette.get("root", theme["soft_bg"])]
+
+                category_color = treemap_palette.get("category", "#E2E8F0")
+
+                leaf_color_map = treemap_palette.get(
+                    "leaf",
+                    {
+                        1: "#F1F5F9",
+                        2: "#CBD5E1",
+                        3: "#94A3B8",
+                    },
                 )
 
-                fig_tree.update_traces(
-                    texttemplate="<b>%{label}</b><br>%{value}점",
-                    hovertemplate="<b>%{label}</b><br>점수: %{value}점<extra></extra>",
+                for category_name, category_df in tree_df.groupby("카테고리"):
+                    category_id = f"{root_label}/{category_name}"
+
+                    labels.append(category_name)
+                    ids.append(category_id)
+                    parents.append(root_label)
+                    values.append(int(category_df["값"].sum()))
+                    colors.append(category_color)
+
+                    for _, factor_row in category_df.iterrows():
+                        factor_label = str(factor_row["요인"])
+                        factor_value = int(factor_row["값"])
+                        factor_id = f"{category_id}/{factor_label}"
+
+                        labels.append(factor_label)
+                        ids.append(factor_id)
+                        parents.append(category_id)
+                        values.append(factor_value)
+                        colors.append(leaf_color_map.get(factor_value, "#DCE6F6"))
+
+                fig_tree = go.Figure(
+                    go.Treemap(
+                        labels=labels,
+                        ids=ids,
+                        parents=parents,
+                        values=values,
+                        branchvalues="total",
+                        marker=dict(
+                            colors=colors,
+                            line=dict(color="rgba(255,255,255,0.96)", width=2),
+                        ),
+                        texttemplate="%{label}<br>%{value}점",
+                        textfont=dict(size=13, color="#0F172A"),
+                        hovertemplate="<b>%{label}</b><br>점수: %{value}점<extra></extra>",
+                        tiling=dict(pad=4),
+                        pathbar=dict(visible=False),
+                    )
                 )
 
                 fig_tree.update_layout(
-                    margin=dict(l=5, r=5, t=10, b=5),
+                    height=355,
+                    margin=dict(l=6, r=6, t=8, b=8),
+                    paper_bgcolor="white",
+                    plot_bgcolor="white",
+                    uniformtext_minsize=11,
+                    uniformtext_mode="hide",
                 )
 
                 st.plotly_chart(
@@ -6062,7 +7594,7 @@ def render_hira_context_detail_section(
 
     with stat_col:
         with st.container(border=True):
-            st.markdown("#### 공공통계")
+            st.markdown("<div class='chart-panel-title'>공공통계</div>", unsafe_allow_html=True)
 
             total_patients = context_df["patients"].sum() if "patients" in context_df.columns else 0
             total_visit_days = context_df["visit_days"].sum() if "visit_days" in context_df.columns else 0
@@ -6077,29 +7609,58 @@ def render_hira_context_detail_section(
             else:
                 avg_cost = 0
 
-            c1, c2 = st.columns(2)
-            c1.metric("환자수", f"{total_patients:,.0f}명")
-            c2.metric("입내원일수", f"{total_visit_days:,.0f}일")
+            kpi_items = [
+                ("환자수", format_compact_korean_number(total_patients, "명")),
+                ("입내원일수", format_compact_korean_number(total_visit_days, "일")),
+                ("1인당 입내원일수", format_compact_korean_number(avg_visit_days, "일")),
+                ("1인당 요양급여비용", format_compact_korean_number(avg_cost, "원")),
+            ]
 
-            c3, c4 = st.columns(2)
-            c3.metric("1인당 입내원일수", f"{avg_visit_days:,.2f}일")
-            c4.metric("1인당 요양급여비용", f"{avg_cost:,.0f}원")
-
-            st.caption(
-                "위 공공통계는 하이라이트 필터와 별개로 전체 HIRA 2024 기준 합계입니다. "
-                "요양기관 소재지 기준 공공 진료 통계이며, 개별 내담자의 진단·중증도·위험도 판단 근거가 아닙니다."
+            kpi_html = "".join(
+                (
+                    '<div class="hira-kpi-card">'
+                    f'<div class="hira-kpi-label">{html_escape(label_text)}</div>'
+                    f'<div class="hira-kpi-value">{html_escape(value_text)}</div>'
+                    "</div>"
+                )
+                for label_text, value_text in kpi_items
             )
+            st.markdown(f"<div class='hira-kpi-grid'>{kpi_html}</div>", unsafe_allow_html=True)
+
+            st.markdown(
+                """
+                <div class="hira-kpi-note">
+                    <span class="hira-kpi-note-icon">i</span>
+                    <span>
+                        위 공공통계는 현재 선택된 내담자의 성별·연령대 조건을 반영한 HIRA 2024 기준 합계입니다.
+                        지역·연령대 선택은 도넛 차트의 하이라이트 용도이며, 개별 내담자의 진단·중증도·위험도 판단 근거가 아닙니다.
+                    </span>
+                </div>
+                <div style="height:0.65rem;"></div>
+                """,
+                unsafe_allow_html=True,
+            )
+
 
     # =====================================================
     # 3행: 상담자 해석 도우미
     # =====================================================
     with st.container(border=True):
-        st.markdown("#### 상담자 해석 도우미")
+        st.markdown(
+            """
+            <div class="hira-interpret-title-row">
+                <span class="hira-interpret-title-icon">i</span>
+                <span class="hira-interpret-title">상담자 해석 도우미</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         highlight_parts = []
 
         if selected_sido != "전체":
             highlight_parts.append(f"{selected_sido} 지역")
+
         if selected_age != "전체":
             highlight_parts.append(f"{selected_age}")
 
@@ -6109,17 +7670,27 @@ def render_hira_context_detail_section(
             highlight_text = "전체 분포"
 
         st.markdown(
-            f"""
-            현재 KlueBERT 판별에서 **{label} 관련 항목이 양성**으로 표시되었습니다.
+            f"""<div class="hira-interpret-card">
+<p class="hira-interpret-lead">
+현재 KlueBERT 판별에서 <strong>{html_escape(label)} 관련 항목이 양성</strong>으로 표시되었습니다.
+</p>
 
-            왼쪽 도넛차트에서는 **{highlight_text}**가 강조되어 있습니다.  
-            이 강조 기능은 상담자가 HIRA 공공통계에서 특정 지역·연령대의 상대적 위치를 빠르게 확인하기 위한 시각적 보조 기능입니다.
+<p>
+도넛차트에서는 <strong>{html_escape(highlight_text)}</strong>가 강조되어 있습니다.
+이 강조 기능은 상담자가 HIRA 공공통계에서 특정 지역·연령대의 상대적 위치를 빠르게 확인하기 위한 시각적 보조 기능입니다.
+</p>
 
-            가운데 트리맵은 HIRA 질환 구성이 아니라, **현재 상담 기록에서 추출된 {label} 관련 28요인 점수 구성**입니다.  
-            따라서 공공통계는 인구통계적 참고자료로, 28요인 트리맵은 현재 상담 발화의 내용 기반 참고자료로 분리해서 해석해야 합니다.
+<p>
+트리맵은 HIRA 질환 구성이 아니라,
+<strong>현재 상담 기록에서 추출된 {html_escape(label)} 관련 28요인 점수 구성</strong>입니다.
+따라서 공공통계는 인구통계적 참고자료로, 28요인 트리맵은 현재 상담 발화의 내용 기반 참고자료로 분리해서 해석해야 합니다.
+</p>
 
-            최종 판단은 상담자가 실제 발화 맥락, 증상 지속 기간, 기능 저하 정도, 보호요인, 위험요인을 함께 검토해 수행해야 합니다.
-            """
+<p class="hira-interpret-final">
+최종 판단은 상담자가 실제 발화 맥락, 증상 지속 기간, 기능 저하 정도, 보호요인, 위험요인을 함께 검토해 수행해야 합니다.
+</p>
+</div>""",
+            unsafe_allow_html=True,
         )
 
 def render_depression_dashboard_section(classification, factors, key_prefix="depression"):
@@ -6339,33 +7910,110 @@ def render_addiction_dashboard_section(classification, factors, key_prefix="addi
             """
         )
 
+def _score_from_session_row(row: pd.Series, key: str, default: int = 0) -> int:
+    """
+    SESSIONS 행에서 depression/anxiety/addiction 같은 점수 컬럼을 안전하게 읽는다.
+    데이터셋 원본 라벨은 0~2 또는 0~3일 수 있으므로 0~3 범위로 제한한다.
+    """
+    try:
+        value = int(float(row.get(key, default) or 0))
+        return max(0, min(3, value))
+    except Exception:
+        return default
+
+
+def _keyword_factor_score(script: str, keywords: List[str], positive_score: int = 3) -> int:
+    """
+    session_scores.csv가 없을 때 회기별 추이용 보조 점수.
+    실제 진단 점수가 아니라 차트 표시용 보조값이다.
+    """
+    text = str(script or "").lower()
+    return positive_score if any(keyword in text for keyword in keywords) else 0
+
+
+def build_session_trend_dataframe(
+    selected_classification: Dict[str, int],
+    selected_factors: Dict[str, int],
+) -> pd.DataFrame:
+    """
+    현재 선택된 내담자의 전체 회기 목록을 기준으로 회기별 추이 데이터를 만든다.
+    - 선택 회기는 현재 분석 결과를 우선 사용
+    - 나머지 회기는 SESSIONS의 라벨 컬럼과 상담 스크립트 키워드 기반 보조 점수를 사용
+    """
+    client_sessions = get_client_sessions_sorted()
+
+    rows = []
+
+    for _, row in client_sessions.iterrows():
+        session_name = str(row.get("회기", "회기미상"))
+        is_selected = str(session_name) == str(st.session_state.selected_session)
+
+        dialogue = SESSION_DIALOGUES.get(
+            (st.session_state.selected_client, session_name),
+            pd.DataFrame(),
+        )
+        script = build_dialogue_text(dialogue) if not dialogue.empty else str(row.get("script", "") or "")
+
+        if is_selected:
+            depression_score = int(selected_classification.get("depression", 0) or 0) * 3
+            anxiety_score = int(selected_classification.get("anxiety", 0) or 0) * 3
+            addiction_score = int(selected_classification.get("addiction", 0) or 0) * 3
+            sleep_score = int(selected_factors.get("sleep_disturbance", 0) or 0)
+            fatigue_score = int(selected_factors.get("fatigue", 0) or 0)
+        else:
+            depression_score = _score_from_session_row(row, "depression", 0)
+            anxiety_score = _score_from_session_row(row, "anxiety", 0)
+            addiction_score = _score_from_session_row(row, "addiction", 0)
+
+            sleep_score = _keyword_factor_score(
+                script,
+                ["잠", "수면", "불면", "자주 깨", "못 자"],
+                positive_score=3,
+            )
+            fatigue_score = _keyword_factor_score(
+                script,
+                ["피곤", "피로", "무기력", "힘들", "기운"],
+                positive_score=3,
+            )
+
+        rows.append(
+            {
+                "회기": session_name,
+                "상담일": row.get("상담일", ""),
+                "우울": depression_score,
+                "불안": anxiety_score,
+                "중독": addiction_score,
+                "수면문제": sleep_score,
+                "피로감": fatigue_score,
+                "선택회기": is_selected,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def render_session_area_trend(classification: Dict[str, int], factors: Dict[str, int]):
     """
-    회기별 추이 변화 라인 차트.
+    선택 내담자의 전체 회기별 추이 변화 라인 차트.
+    선택된 회기는 세로 음영과 마커로 강조한다.
     """
+    trend = build_session_trend_dataframe(classification, factors)
 
-    trend = pd.DataFrame(
-        {
-            "회기": ["1회기", "2회기", "3회기", "현재"],
-            "우울": [2.8, 2.6, 2.4, int(classification.get("depression", 0) or 0) * 3],
-            "불안": [2.7, 2.5, 2.4, int(classification.get("anxiety", 0) or 0) * 3],
-            "중독": [1.2, 1.1, 1.0, int(classification.get("addiction", 0) or 0) * 3],
-            "수면문제": [3.0, 3.0, 3.0, int(factors.get("sleep_disturbance", 0) or 0)],
-            "피로감": [2.2, 2.6, 3.0, int(factors.get("fatigue", 0) or 0)],
-        }
-    )
+    if trend.empty:
+        st.info("회기별 추이를 표시할 상담 회기가 없습니다.")
+        return
 
     color_map = {
-        "우울": "#2563EB",
-        "불안": "#60A5FA",
-        "중독": "#A78BFA",
-        "수면문제": "#94A3B8",
-        "피로감": "#CBD5E1",
+        "우울": SERIES_COLOR_MAP["우울"],
+        "불안": SERIES_COLOR_MAP["불안"],
+        "중독": SERIES_COLOR_MAP["중독"],
+        "수면문제": SERIES_COLOR_MAP["수면문제"],
+        "피로감": SERIES_COLOR_MAP["피로감"],
     }
 
     fig = go.Figure()
 
-    x_values = trend["회기"].tolist()
+    x_values = trend["회기"].astype(str).tolist()
     series_names = ["우울", "불안", "중독", "수면문제", "피로감"]
 
     for series in series_names:
@@ -6380,16 +8028,46 @@ def render_session_area_trend(classification: Dict[str, int], factors: Dict[str,
                 line=dict(
                     color=color_map[series],
                     width=3,
-                    shape="spline",
+                    shape="linear",
                 ),
                 marker=dict(
-                    size=7,
+                    size=8,
                     color=color_map[series],
+                    opacity=0.78,
                     line=dict(width=2, color="white"),
                 ),
-                fill="none",
+                opacity=0.72,
+                fill="tozeroy" if series in ["우울", "불안"] else None,
+                fillcolor="rgba(37, 99, 235, 0.08)" if series == "우울" else (
+                    "rgba(96, 165, 250, 0.08)" if series == "불안" else None
+                ),
                 hovertemplate=f"<b>{series}</b><br>회기: %{{x}}<br>점수: %{{y:.1f}}<extra></extra>",
             )
+        )
+
+    selected_session = str(st.session_state.selected_session)
+
+    if selected_session in x_values:
+        selected_index = x_values.index(selected_session)
+
+        fig.add_vrect(
+            x0=selected_index - 0.35,
+            x1=selected_index + 0.35,
+            fillcolor="rgba(37, 99, 235, 0.10)",
+            line_width=0,
+            layer="below",
+        )
+
+        fig.add_annotation(
+            x=selected_session,
+            y=3.15,
+            text="선택 회기",
+            showarrow=False,
+            font=dict(size=12, color="#1D4ED8"),
+            bgcolor="rgba(239, 246, 255, 0.95)",
+            bordercolor="#93C5FD",
+            borderwidth=1,
+            borderpad=4,
         )
 
     fig.update_layout(
@@ -6398,7 +8076,7 @@ def render_session_area_trend(classification: Dict[str, int], factors: Dict[str,
         xaxis_title="",
         yaxis_title="점수 (0-3)",
         yaxis=dict(range=[0, 3.2], showgrid=True, gridcolor="#E5EAF2", zeroline=False),
-        xaxis=dict(showgrid=True, gridcolor="#E5EAF2", zeroline=False),
+        xaxis=dict(showgrid=True, gridcolor="#E5EAF2", zeroline=False, type="category"),
         legend=dict(
             orientation="v",
             yanchor="middle",
@@ -6414,6 +8092,10 @@ def render_session_area_trend(classification: Dict[str, int], factors: Dict[str,
 
     st.plotly_chart(fig, use_container_width=True, key="session_line_trend_chart")
 
+    st.caption(
+        f"현재 선택 회기: {selected_session}. "
+        "선택 회기는 차트에서 파란 음영으로 강조됩니다."
+    )
 
 def render_factor_detail_table(factor_df: pd.DataFrame):
     """
@@ -6586,7 +8268,10 @@ def render_ai_summary_cards(factors: Dict[str, int]):
 {cards_html}
 </div>
 <div class="ai-summary-footnote">
-    위 요약은 AI 분석 결과의 보조 참고 자료이며, 최종 판단과 상담 방향은 상담사의 전문적 판단을 우선합니다.
+    <span class="dashboard-note-icon">i</span>
+    <span>
+        위 요약은 AI 분석 결과의 보조 참고 자료이며, 최종 판단과 상담 방향은 상담사의 전문적 판단을 우선합니다.
+    </span>
 </div>
 </div>""",
         unsafe_allow_html=True,
@@ -6651,13 +8336,7 @@ def render_factor_top10_chart(factor_df: pd.DataFrame):
             color="표시 카테고리",
             orientation="h",
             range_x=[0, 3],
-            color_discrete_map={
-                "우울": "#2563EB",
-                "불안": "#60A5FA",
-                "중독": "#93C5FD",
-                "상담사 개입": "#CBD5E1",
-                "변화/기타": "#E2E8F0",
-            },
+            color_discrete_map=FACTOR_CATEGORY_COLOR_MAP,
             height=440,
         )
         fig_factor.update_layout(
@@ -6686,13 +8365,7 @@ def render_all_factor_expander(factor_df: pd.DataFrame):
             color="표시 카테고리",
             orientation="h",
             range_x=[0, 3],
-            color_discrete_map={
-                "우울": "#2563EB",
-                "불안": "#60A5FA",
-                "중독": "#93C5FD",
-                "상담사 개입": "#CBD5E1",
-                "변화/기타": "#E2E8F0",
-            },
+            color_discrete_map=FACTOR_CATEGORY_COLOR_MAP,
             height=760,
         )
 
@@ -6709,7 +8382,7 @@ def render_all_factor_expander(factor_df: pd.DataFrame):
         st.plotly_chart(fig_all_factor, use_container_width=True, key="all_factor_28_chart")
 
 def render_dashboard():
-    title_col, chat_col = st.columns([0.88, 0.12], vertical_alignment="top")
+    title_col, chat_col = st.columns([0.94, 0.06], vertical_alignment="top")
 
     with title_col:
         st.markdown('<div class="patient-title dashboard-title">분석 대시보드</div>', unsafe_allow_html=True)
@@ -6725,7 +8398,7 @@ def render_dashboard():
         if st.button(
             chatbot_button_label,
             key="dashboard_chatbot_fab",
-            use_container_width=True,
+            use_container_width=False,
             help="챗봇으로 이동",
         ):
             go_page("챗봇")
@@ -6774,7 +8447,7 @@ def render_dashboard():
     st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
     render_top_risk_cards(classification, factors)
 
-    st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:0.35rem;"></div>', unsafe_allow_html=True)
     render_ai_summary_cards(factors)
 
     st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
@@ -6798,7 +8471,7 @@ def render_dashboard():
         render_all_factor_expander(factor_df)
 
     st.markdown('<div class="dashboard-section-gap"></div>', unsafe_allow_html=True)
-    hira_left_col, hira_right_col = st.columns([1, 1], gap="large")
+    hira_left_col, hira_right_col = st.columns([0.44, 0.56], gap="medium")
 
     with hira_left_col:
         with st.container(border=True):
@@ -6811,16 +8484,10 @@ def render_dashboard():
 
     with hira_right_col:
         with st.container(border=True):
-            include_negative_hira = st.checkbox(
-                "증상별 입내원정보에서 음성 항목도 함께 보기",
-                value=False,
-                key="include_negative_hira_items",
-                help="기본값은 KlueBERT 양성 항목만 증상별 입내원정보 카드에 표시합니다.",
-            )
             try:
                 render_hira_report_sentence_card(
                     classification=classification,
-                    include_negative=include_negative_hira,
+                    include_negative=False,
                 )
             except FileNotFoundError:
                 st.markdown("### 증상별 입내원정보")
@@ -6870,6 +8537,20 @@ def render_report():
     report_client_id = str(st.session_state.selected_client)
     report_session_label = str(st.session_state.selected_session)
     report_key = (report_client_id, report_session_label)
+    current_report_context = f"{report_client_id}_{report_session_label}_{result.get('created_at', '')}"
+
+    if st.session_state.get("current_report_context") != current_report_context:
+        for section_key in [
+            "report_section_1",
+            "report_section_2",
+            "report_section_3",
+            "report_section_4",
+            "report_section_5",
+        ]:
+            st.session_state.pop(section_key, None)
+
+        st.session_state["current_report_context"] = current_report_context
+    
     saved_report = st.session_state.get("saved_reports", {}).get(report_key, {})
     saved_sections = saved_report.get("edited_sections", {})
 
@@ -6895,6 +8576,254 @@ def render_report():
         "요인 분석 바 차트 영역",
         "HIRA 비교 차트 영역",
     ]
+    def build_report_factor_chart(factors: Dict[str, int]):
+        factor_chart_df = build_factor_dataframe(factors).copy()
+        factor_chart_df = factor_chart_df[factor_chart_df["점수"] > 0]
+        factor_chart_df = factor_chart_df.sort_values("점수", ascending=False).head(8)
+        factor_chart_df = factor_chart_df.sort_values("점수", ascending=True)
+
+        if factor_chart_df.empty:
+            return None
+
+        fig = px.bar(
+            factor_chart_df,
+            x="점수",
+            y="요인",
+            color="카테고리",
+            orientation="h",
+            range_x=[0, 3],
+            height=260,
+            color_discrete_map={
+                "우울/증상": "#7E9FE6",
+                "불안": "#A991E6",
+                "중독": "#8ECAD8",
+                "상담사 개입": "#F3A8BE",
+                "변화/기타": "#CBD5E1",
+            },
+        )
+
+        fig.update_layout(
+            margin=dict(l=6, r=6, t=8, b=10),
+            xaxis_title="점수",
+            yaxis_title="",
+            legend_title_text="",
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            font=dict(color="#475569", size=10),
+        )
+        fig.update_xaxes(showgrid=True, gridcolor="#E2E8F0", zeroline=False)
+        fig.update_yaxes(showgrid=False, zeroline=False)
+        return fig
+
+
+    def build_report_risk_chart(classification: Dict[str, int]):
+        risk_df = pd.DataFrame(
+            [
+                {"항목": "우울", "값": int(classification.get("depression", 0) or 0)},
+                {"항목": "불안", "값": int(classification.get("anxiety", 0) or 0)},
+                {"항목": "중독", "값": int(classification.get("addiction", 0) or 0)},
+            ]
+        )
+
+        fig = px.bar(
+            risk_df,
+            x="항목",
+            y="값",
+            text="값",
+            range_y=[0, 1.1],
+            height=230,
+            color="항목",
+            color_discrete_map={
+                "우울": "#7E9FE6",
+                "불안": "#A991E6",
+                "중독": "#8ECAD8",
+            },
+        )
+        fig.update_traces(textposition="outside")
+        fig.update_layout(
+            margin=dict(l=6, r=6, t=8, b=10),
+            xaxis_title="",
+            yaxis_title="KlueBERT 판별값",
+            showlegend=False,
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            font=dict(color="#475569", size=10),
+        )
+        fig.update_xaxes(showgrid=False)
+        fig.update_yaxes(showgrid=True, gridcolor="#E2E8F0", zeroline=False)
+        return fig
+
+
+    def build_report_hira_chart(classification: Dict[str, int]):
+        hira_summary_df = build_hira_summary_dataframe(
+            classification=classification,
+            include_negative=False,
+        )
+
+        if hira_summary_df.empty:
+            return None
+
+        chart_df = (
+            hira_summary_df.sort_values("patients", ascending=False)
+            .head(5)
+            .sort_values("patients", ascending=True)
+        )
+
+        fig = px.bar(
+            chart_df,
+            x="patients",
+            y="disease",
+            orientation="h",
+            text="patients",
+            height=230,
+            color="질환군",
+            color_discrete_map={
+                "우울": "#7E9FE6",
+                "불안": "#A991E6",
+                "중독": "#8ECAD8",
+            },
+        )
+        fig.update_traces(texttemplate="%{text:,}", textposition="outside")
+        fig.update_layout(
+            margin=dict(l=6, r=20, t=8, b=10),
+            xaxis_title="환자수",
+            yaxis_title="",
+            legend_title_text="",
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            font=dict(color="#475569", size=10),
+        )
+        fig.update_xaxes(showgrid=True, gridcolor="#E2E8F0", zeroline=False)
+        fig.update_yaxes(showgrid=False)
+        return fig
+
+    def make_report_chart_images(classification: Dict[str, int], factors: Dict[str, int]) -> List[Dict[str, Any]]:
+        chart_images = []
+
+        chart_specs = [
+            ("AI 판별 요약", build_report_risk_chart(classification)),
+            ("HIRA 입내원정보", build_report_hira_chart(classification)),
+            ("주요 28요인", build_report_factor_chart(factors)),
+        ]
+
+        for chart_title, fig in chart_specs:
+            if fig is None:
+                continue
+
+            try:
+                image_bytes = fig.to_image(
+                    format="png",
+                    scale=2,
+                    width=900,
+                    height=420,
+                )
+            except Exception:
+                continue
+
+            chart_images.append(
+                {
+                    "title": chart_title,
+                    "image_bytes": image_bytes,
+                }
+            )
+
+        return chart_images
+
+
+    def render_report_attached_charts(
+        classification: Dict[str, int], 
+        factors: Dict[str, int], 
+        key_prefix: str,
+        mode: str="edit",
+    ): 
+        risk_fig = build_report_risk_chart(classification)
+        factor_fig = build_report_factor_chart(factors)
+        hira_fig = build_report_hira_chart(classification)
+
+        with st.container(border=True):
+            if mode == "preview":
+                st.markdown(
+                    """
+                    <div class="report-preview-section-title">
+                        6. 첨부 차트
+                        <span class="report-preview-auto-badge">자동 생성</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    """
+                    <div class="report-block-header report-chart-block-header">
+                        <div>
+                            <span class="report-block-title">6. 첨부 차트</span>
+                            <span class="report-edit-badge">자동 생성</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            top_left_col, top_right_col = st.columns([0.42, 0.58], gap="medium")
+
+            with top_left_col:
+                with st.container(border=True):
+                    st.markdown(
+                        '<div class="report-attached-chart-title">AI 판별 요약</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.plotly_chart(
+                        risk_fig,
+                        use_container_width=True,
+                        key=f"{key_prefix}_risk_chart",
+                        config={"displayModeBar": False},
+                    )
+
+            with top_right_col:
+                with st.container(border=True):
+                    st.markdown(
+                        '<div class="report-attached-chart-title">HIRA 입내원정보</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if hira_fig is None:
+                        st.info("표시할 HIRA 통계가 없습니다.")
+                    else:
+                        st.plotly_chart(
+                            hira_fig,
+                            use_container_width=True,
+                            key=f"{key_prefix}_hira_chart",
+                            config={"displayModeBar": False},
+                        )
+
+            st.markdown('<div style="height:0.65rem;"></div>', unsafe_allow_html=True)
+
+            with st.container(border=True):
+                st.markdown(
+                    '<div class="report-attached-chart-title">주요 28요인</div>',
+                    unsafe_allow_html=True,
+                )
+                if factor_fig is None:
+                    st.info("표시할 28요인 점수가 없습니다.")
+                else:
+                    st.plotly_chart(
+                        factor_fig,
+                        use_container_width=True,
+                        key=f"{key_prefix}_factor_chart",
+                        config={"displayModeBar": False},
+                    )
+
+        st.markdown(
+            """
+            <div class="dashboard-note-line report-ai-note">
+                <span class="dashboard-note-icon">i</span>
+                <span>
+                    AI가 생성한 보고서입니다. 상담사의 전문적 판단에 따라 내용을 검토·수정하여 사용하시기 바랍니다.
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    
     report_caution = "AI가 생성한 보고서입니다. 상담사의 전문적 판단에 따라 내용을 검토·수정하여 사용하시기 바랍니다."
 
     def extract_section(text: str, number: int, fallback: str = "") -> str:
@@ -6906,41 +8835,158 @@ def render_report():
 
         return fallback
 
+    def clean_report_section_text(text: str) -> str:
+        """
+        KoAlpaca/Gemini 요약 결과에 원문 대화, 특수기호, 타임스탬프, 깨진 토큰이 섞이는 경우를 제거한다.
+        """
+        clean_text = str(text or "").strip()
+
+        # 깨진 특수문자/타임스탬프/마크다운 잡음 제거
+        clean_text = re.sub(r"[*／＾＾¶；]+", " ", clean_text)
+        clean_text = re.sub(r"\b\d+\s*[：:]\s*\d+\b", " ", clean_text)
+        clean_text = re.sub(r"[#]{2,}.*", " ", clean_text)
+
+        lines = []
+        for line in clean_text.splitlines():
+            line = line.strip()
+
+            if not line:
+                continue
+
+            # 원문 대화처럼 들어온 줄 제거
+            if re.match(r"^(상담자|상담사|내담자|면접자|상담소)\s*[:\t ]", line):
+                continue
+
+            # 숫자/기호만 길게 반복되는 줄 제거
+            if re.fullmatch(r"[\d\s;；:：.,\-]+", line):
+                continue
+
+            # 디버그성/원문 재정리성 문구 제거
+            if "상담 내용을 재정리" in line:
+                continue
+            if "상담 가능한가요" in line:
+                continue
+            if "상담료" in line:
+                continue
+
+            lines.append(line)
+
+        clean_text = "\n".join(lines)
+        clean_text = re.sub(r"\n{3,}", "\n\n", clean_text).strip()
+
+        return clean_text
+
+
+    def is_noisy_report_section(text: str) -> bool:
+        """
+        보고서 섹션으로 쓰기 부적절한 오염 텍스트인지 판단한다.
+        """
+        clean_text = str(text or "").strip()
+
+        if not clean_text:
+            return True
+
+        noise_patterns = [
+            r"상담자\s*[:\t ]",
+            r"상담사\s*[:\t ]",
+            r"내담자\s*[:\t ]",
+            r"면접자\s*[:\t ]",
+            r"[*／＾＾¶；]{2,}",
+            r"\d+；\d+；\d+",
+            r"상담 가능한가요",
+            r"상담료",
+        ]
+
+        if any(re.search(pattern, clean_text) for pattern in noise_patterns):
+            return True
+
+        # 주요 증상 섹션이 너무 길면 원문 대화가 섞였을 가능성이 높다.
+        if len(clean_text) > 900:
+            return True
+
+        return False
+
+
+    def build_clean_symptom_section(classification: Dict[str, int], factors: Dict[str, int]) -> str:
+        """
+        오염된 LLM 요약 대신 사용할 구조화된 주요 증상 문장.
+        """
+        factor_df = build_factor_dataframe(factors).copy()
+        positive_df = (
+            factor_df[factor_df["점수"] > 0]
+            .sort_values(["점수", "요인"], ascending=[False, True])
+            .head(5)
+        )
+
+        label_items = []
+
+        if int(classification.get("depression", 0) or 0) == 1:
+            label_items.append("우울 관련")
+        if int(classification.get("anxiety", 0) or 0) == 1:
+            label_items.append("불안 관련")
+        if int(classification.get("addiction", 0) or 0) == 1:
+            label_items.append("중독 관련")
+
+        label_text = ", ".join(label_items) if label_items else "뚜렷한 양성 판별 항목은 제한적"
+
+        if positive_df.empty:
+            factor_text = "현재 0점 초과로 추출된 세부 요인은 제한적입니다."
+        else:
+            factor_text = ", ".join(
+                [f"{row['요인']}({int(row['점수'])}점)" for _, row in positive_df.iterrows()]
+            )
+
+        return (
+            f"현재 상담 기록 기준으로 {label_text} 호소가 확인됩니다.\n"
+            f"주요 세부 요인은 {factor_text}입니다.\n"
+            "위 내용은 상담 기록과 모델 출력에 기반한 참고 요약이며, 임상 진단 또는 표준화 검사 점수로 단정하지 않습니다."
+        )
+
     classification = result.get("classification", {})
     factor_df = build_factor_dataframe(result.get("factors", {})).sort_values("점수", ascending=False).head(5)
     top_factor_text = ", ".join(
         [f"{row['요인']}({row['점수']})" for _, row in factor_df.iterrows() if int(row["점수"]) > 0]
     ) or "뚜렷하게 상승한 세부 요인은 제한적입니다."
 
-    section_1 = extract_section(
-        report_text,
-        1,
-        (
-            f"우울 {classification.get('depression', 0)}/3, 불안 {classification.get('anxiety', 0)}/3, "
-            f"중독 {classification.get('addiction', 0)}/3 수준으로 분류되었습니다.\n"
-            f"상위 세부 요인은 {top_factor_text}입니다.\n"
-            f"{result.get('summary', '')}"
-        ),
+    raw_section_1 = extract_section(report_text, 1, "")
+    section_1 = clean_report_section_text(raw_section_1)
+
+    if is_noisy_report_section(section_1):
+        section_1 = build_clean_symptom_section(
+            classification=classification,
+            factors=result.get("factors", {}),
+        )
+        
+    section_2 = clean_report_section_text(
+        extract_section(
+            report_text,
+            2,
+            "수면, 피로, 회피 행동, 자기비하적 사고, 일상 기능 저하 가능성을 중심으로 추가 확인이 필요합니다.",
+        )
     )
-    section_2 = extract_section(
-        report_text,
-        2,
-        "수면, 피로, 회피 행동, 자기비하적 사고, 일상 기능 저하 가능성을 중심으로 추가 확인이 필요합니다.",
+        
+    section_3 = clean_report_section_text(
+        extract_section(
+            report_text,
+            3,
+            "내담자가 문제 상황을 언어화하고 상담 장면에 참여하고 있다는 점은 개입의 기반이 될 수 있습니다.",
+        )
     )
-    section_3 = extract_section(
-        report_text,
-        3,
-        "내담자가 문제 상황을 언어화하고 상담 장면에 참여하고 있다는 점은 개입의 기반이 될 수 있습니다.",
+
+    section_4 = clean_report_section_text(
+        extract_section(
+            report_text,
+            4,
+            "상담사는 수면 양상 확인, 감정 명명, 자동사고 탐색, 공감 및 지지, 다음 회기 과제 설정을 중심으로 개입할 수 있습니다.",
+        )
     )
-    section_4 = extract_section(
-        report_text,
-        4,
-        "상담사는 수면 양상 확인, 감정 명명, 자동사고 탐색, 공감 및 지지, 다음 회기 과제 설정을 중심으로 개입할 수 있습니다.",
-    )
-    section_5 = extract_section(
-        report_text,
-        5,
-        "다음 회기에서는 수면 양상, 출근 전 불안 상황, 회피 행동, 자기비하적 사고, 현재 대처 방식을 구체적으로 확인합니다.",
+
+    section_5 = clean_report_section_text(
+        extract_section(
+            report_text,
+            5,
+            "다음 회기에서는 수면 양상, 출근 전 불안 상황, 회피 행동, 자기비하적 사고, 현재 대처 방식을 구체적으로 확인합니다.",
+        )
     )
 
     base_sections = {
@@ -7005,20 +9051,33 @@ def render_report():
         preview_sections = base_sections
         preview_meta = report_meta
 
+    chart_images = make_report_chart_images(
+        classification=classification,
+        factors=result.get("factors", {}),
+    )
+
     report_download_kwargs = {
         "client_id": report_client_id,
         "session_label": report_session_label,
         "metadata": preview_meta,
         "sections": preview_sections,
         "chart_placeholders": chart_placeholders,
+        "chart_images": chart_images,
         "caution_text": report_caution,
         "title": report_title,
     }
     pdf_bytes = make_pdf_report_bytes(preview_report, **report_download_kwargs)
+
+    if pdf_bytes is None:
+        pdf_bytes = make_simple_pdf_report_bytes(
+            preview_report,
+            title=report_title,
+        )
+
     docx_bytes = make_docx_report_bytes(preview_report, **report_download_kwargs)
-    md_download_label = f"![md]({get_png_data_uri(MD_ICON_PATH)}) MD 다운로드"
-    pdf_download_label = f"![pdf]({get_png_data_uri(PDF_ICON_PATH)}) PDF 다운로드"
-    docx_download_label = f"![docx]({get_png_data_uri(DOCX_ICON_PATH)}) DOCX 다운로드"
+    md_download_label = build_download_label(MD_ICON_PATH, "📝", "MD 다운로드")
+    pdf_download_label = build_download_label(PDF_ICON_PATH, "📄", "PDF 다운로드")
+    docx_download_label = build_download_label(DOCX_ICON_PATH, "📘", "DOCX 다운로드")
 
     if st.session_state.report_preview_mode:
         close_col, spacer, md_col, pdf_col, docx_col = st.columns([0.06, 0.46, 0.16, 0.16, 0.16], gap="small")
@@ -7082,10 +9141,18 @@ def render_report():
                 "metadata": preview_meta,
                 "sections": preview_sections,
                 "chart_placeholders": chart_placeholders,
+                "chart_images": chart_images,
                 "caution_text": report_caution,
                 "title": report_title,
             }
             pdf_bytes = make_pdf_report_bytes(preview_report, **report_download_kwargs)
+
+            if pdf_bytes is None:
+                pdf_bytes = make_simple_pdf_report_bytes(
+                    preview_report,
+                    title=report_title,
+                )
+                
             docx_bytes = make_docx_report_bytes(preview_report, **report_download_kwargs)
             st.success("보고서 수정 내용을 현재 앱 세션에 저장했습니다.")
 
@@ -7148,23 +9215,18 @@ def render_report():
     <div class="report-preview-section-title">5.다음 회기 계획 추천</div>
     <div class="report-preview-section-body">{html_escape(preview_sections.get("report_section_5", ""))}</div>
 </div>
-
-<div class="report-preview-chart-panel">
-    <div class="report-preview-chart-title">첨부 차트 영역</div>
-    <div class="report-preview-chart-grid">
-        <div class="report-preview-mini-chart">{html_escape(chart_placeholders[0])}</div>
-        <div class="report-preview-mini-chart">{html_escape(chart_placeholders[1])}</div>
-        <div class="report-preview-mini-chart">{html_escape(chart_placeholders[2])}</div>
-    </div>
-</div>
-</div>
-
-<div class="report-preview-footer-note">
-    {html_escape(report_caution)}
-</div>
 """
 
         st.markdown(preview_html, unsafe_allow_html=True)
+
+        render_report_attached_charts(
+            classification=classification,
+            factors=result.get("factors", {}),
+            key_prefix="preview_report",
+            mode="preview",
+        )
+
+
         return
 
     report_sections = [
@@ -7175,6 +9237,18 @@ def render_report():
         ("5. 다음 회기 계획 추천", "report_section_5", editor_default_sections["report_section_5"]),
     ]
 
+    def get_text_area_height(text: str) -> int:
+        """
+        텍스트 길이와 줄 수에 따라 보고서 편집 박스 높이를 유동적으로 계산한다.
+        Streamlit text_area는 완전 자동 높이 조절은 없으므로, 렌더링 시 height를 계산한다.
+        """
+        clean_text = str(text or "")
+        line_count = clean_text.count("\n") + 1
+        estimated_wrapped_lines = max(1, len(clean_text) // 48)
+        total_lines = max(line_count, estimated_wrapped_lines)
+
+        return min(420, max(118, total_lines * 24 + 52))
+    
     st.markdown(
         f"""
         <div class="report-preview-chip-row" style="justify-content:flex-start; margin-top:1.15rem; margin-bottom:1rem;">
@@ -7202,27 +9276,24 @@ def render_report():
                 """,
                 unsafe_allow_html=True,
             )
-            st.text_area(title, value=st.session_state.get(key, value), height=118, label_visibility="collapsed", key=key)
+            current_value = st.session_state.get(key, value)
 
-    st.markdown(
-        """
-        <div class="report-chart-preview">
-            <div class="report-section-title">첨부 차트 영역</div>
-            <div class="page-desc">보고서 구성 안에서 차트가 들어갈 위치입니다. 현재 단계에서는 placeholder로 유지합니다.</div>
-            <div class="chart-placeholder-grid">
-                <div class="chart-placeholder-card">위험도 요약 카드 영역</div>
-                <div class="chart-placeholder-card">요인 분석 바 차트 영역</div>
-                <div class="chart-placeholder-card">HIRA 비교 차트 영역</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+            st.text_area(
+                title,
+                value=current_value,
+                height=get_text_area_height(current_value),
+                label_visibility="collapsed",
+                key=key,
+            )
+            
+    st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
+
+    render_report_attached_charts(
+        classification=classification,
+        factors=result.get("factors", {}),
+        key_prefix="edit_report",
     )
 
-    st.markdown(
-        f'<div class="report-footnote">{html_escape(report_caution)}</div>',
-        unsafe_allow_html=True,
-    )
 
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
 
@@ -7271,11 +9342,16 @@ def render_chat_messages():
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-            if message["role"] == "assistant" and "sources" in message:
-                with st.expander("검색 근거 보기"):
-                    for source in message["sources"]:
-                        st.markdown(f"**{source['title']}**")
-                        st.caption(source["desc"])
+            if message["role"] == "assistant":
+                with st.chat_message("assistant"):
+                    render_chatbot_answer_card(message.get("content", ""))
+
+                    sources = message.get("sources", [])
+                    if sources:
+                        with st.expander("참고한 검색 결과", expanded=False):
+                            for idx, source in enumerate(sources, start=1):
+                                st.markdown(f"**출처 {idx}. {source.get('title', '출처 없음')}**")
+                                st.caption(source.get("desc", ""))
 
 
 def render_quick_question_buttons():
@@ -7295,6 +9371,67 @@ def render_quick_question_buttons():
                 add_mock_answer(question)
                 st.rerun()
 
+def render_chatbot_answer_card(content: str):
+    """
+    챗봇 답변을 코드처럼 보이지 않게 카드형 HTML로 렌더링한다.
+    번호 섹션을 감지해서 제목/본문을 분리한다.
+    """
+    text = clean_chatbot_answer(content)
+
+    # "1. 핵심 요약" 같은 번호 제목 기준으로 분리
+    section_pattern = r"(?m)^\s*(\d+)\.\s+([^\n]+)"
+    matches = list(re.finditer(section_pattern, text))
+
+    if not matches:
+        st.markdown(
+            f"""
+            <div class="chat-answer-card">
+                <div class="chat-answer-body">{html_escape(text).replace(chr(10), "<br>")}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    intro = text[:matches[0].start()].strip()
+
+    if intro:
+        st.markdown(
+            f"""
+            <div class="chat-answer-intro">
+                {html_escape(intro).replace(chr(10), "<br>")}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    for idx, match in enumerate(matches):
+        number = match.group(1)
+        title = match.group(2).strip()
+
+        body_start = match.end()
+        body_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = text[body_start:body_end].strip()
+
+        # bullet을 HTML 줄바꿈으로 자연스럽게 표시
+        body_html = html_escape(body)
+        body_html = body_html.replace("\n• ", "<br>• ")
+        body_html = body_html.replace("\n", "<br>")
+
+        st.markdown(
+            f"""
+            <div class="chat-answer-section">
+                <div class="chat-answer-section-title">
+                    <span class="chat-answer-section-number">{number}</span>
+                    {html_escape(title)}
+                </div>
+                <div class="chat-answer-section-body">
+                    {body_html}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 def render_chatbot():
     st.markdown('<span class="chatbot-page-marker"></span>', unsafe_allow_html=True)
@@ -7472,7 +9609,6 @@ def render_chatbot():
             default=None,
             key=f"chat_quick_question_pills_{st.session_state.chat_quick_pill_nonce}",
             label_visibility="collapsed",
-            width="content",
         )
 
         if selected_quick_question:
