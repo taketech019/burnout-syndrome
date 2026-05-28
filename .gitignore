@@ -1,6 +1,4 @@
 # 데이터 파일 무시, 폴더 구조(.gitkeep)는 유지
-data/**
-!data/*/
 !data/**/.gitkeep
 chroma_db/
 *.sqlite3
@@ -62,7 +60,6 @@ hf-upload/
 hf-space/
 hf-space-remote/
 
-data/processed/*
 !data/processed/.gitkeep
 
 !data/references/
@@ -70,4 +67,8 @@ data/processed/*
 
 !chroma_db/
 !chroma_db/**
+data/processed/counseling_chunks.jsonl
+
+#원본/대용량 데이터
+data/local/
 data/processed/counseling_chunks.jsonl
