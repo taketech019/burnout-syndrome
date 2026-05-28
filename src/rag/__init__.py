@@ -1,4 +1,11 @@
-"""F4 RAG 챗봇 — LangChain + ChromaDB + KoSBERT + Ollama Qwen2.5 7B."""
-from src.rag.chain import answer_query, healthcheck
+def chat(query: str) -> str:
+    from .chatbot import chat as _chat
+    return _chat(query)
 
-__all__ = ["answer_query", "healthcheck"]
+
+def search(query: str, collection_name: str = "clinical_references", n_results: int = 3):
+    from .retriever import search as _search
+    return _search(query, collection_name, n_results)
+
+
+__all__ = ["chat", "search"]

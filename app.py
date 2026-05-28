@@ -20,7 +20,14 @@ from src.classifier import classify_text
 from src.factor_extractor import FACTOR_CATEGORIES, FACTOR_KEYS, FACTOR_LABELS, extract_factors
 from src.hira import lookup as hira_lookup
 from src.insight import dashboard_insight, hira_summary_one_line, stats_insight
-from src.rag import answer_query, healthcheck as rag_healthcheck
+import sys as _sys
+for _k in [k for k in _sys.modules if k.startswith("src.rag")]:
+    del _sys.modules[_k]
+try:
+    from src.rag import chat as rag_chat
+except Exception as _rag_e:
+    def rag_chat(query: str) -> str:  # noqa: E306
+        return f"RAG 모듈 초기화 실패: {_rag_e}"
 from src.report import build_docx, build_md, build_pdf
 from src.stats import aggregate_global_stats, classification_distribution, factor_top_n
 from src.summarizer import summarize
@@ -669,9 +676,19 @@ def render_ai_panel(context_session_id: Optional[str] = None) -> None:
                 unsafe_allow_html=True,
             )
 
-    status = rag_healthcheck()
-    if not (status.get("llm") and status.get("chroma")):
-        st.warning("RAG 인덱스/LLM 키 점검 필요")
+    from config import GEMINI_API_KEY as _gkey, CHROMA_DIR as _cdir
+
+    def _panel_chroma_ok() -> bool:
+        try:
+            import chromadb
+            c = chromadb.PersistentClient(path=str(_cdir))
+            c.get_collection("counseling_cases")
+            return True
+        except Exception:
+            return False
+
+    if not (_gkey and _panel_chroma_ok()):
+        st.warning("RAG 인덱스/LLM 키 점검 필요. `python src/rag/build_db.py` 실행")
 
     if context_session_id:
         st.caption("이 회기에 대해:")
@@ -727,24 +744,10 @@ def _handle_panel_query(prompt: str, session_id: Optional[str]) -> None:
             if brief:
                 enriched = f"[현재 회기 요약]\n{brief}\n\n[질문]\n{prompt}"
 
-    result = answer_query(enriched, k=5)
+    answer = rag_chat(enriched)
     history = st.session_state.setdefault("ai_panel_history", [])
     history.append({"role": "user", "content": prompt})
-    if result.get("error"):
-        history.append({
-            "role": "assistant",
-            "content": result["error"],
-            "sources": [],
-        })
-    else:
-        history.append({
-            "role": "assistant",
-            "content": result.get("answer", ""),
-            "sources": [
-                {"title": s["source"], "desc": s["snippet"]}
-                for s in result.get("sources", [])
-            ],
-        })
+    history.append({"role": "assistant", "content": answer, "sources": []})
 
 
 def page_with_optional_panel(
@@ -1670,18 +1673,30 @@ def render_chatbot() -> None:
         subtitle="Gemini 2.5 Flash + KoSBERT + ChromaDB — AI Hub 라벨링·윤리규정·HIRA 검색",
     )
 
-    status = rag_healthcheck()
+    from config import GEMINI_API_KEY as _gkey, CHROMA_DIR as _cdir
+    llm_ok = bool(_gkey)
+
+    def _chatbot_chroma_ok() -> bool:
+        try:
+            import chromadb
+            c = chromadb.PersistentClient(path=str(_cdir))
+            c.get_collection("counseling_cases")
+            c.get_collection("clinical_references")
+            return True
+        except Exception:
+            return False
+
+    chroma_ok = _chatbot_chroma_ok()
     c = st.columns(3)
-    c[0].metric("LLM API", "✓" if status.get("llm") else "✗",
-                help=status.get("llm_model", ""))
-    c[1].metric("ChromaDB", "✓" if status.get("chroma") else "✗")
+    c[0].metric("LLM API", "✓" if llm_ok else "✗", help="GEMINI_API_KEY")
+    c[1].metric("ChromaDB", "✓" if chroma_ok else "✗")
     c[2].metric("대화 수", f"{len(st.session_state.get('chat_history', []))} 건")
 
-    if not status.get("llm"):
+    if not llm_ok:
         st.warning("GEMINI_API_KEY 미설정")
         return
-    if not status.get("chroma"):
-        st.warning("RAG 인덱스 미생성. `python -m src.rag.ingest` 실행.")
+    if not chroma_ok:
+        st.warning("RAG 인덱스 미생성. `python src/rag/build_db.py` 실행.")
         return
 
     if st.button(":material/delete: 대화 초기화", key="chat_clear"):
@@ -1731,20 +1746,8 @@ def render_chatbot() -> None:
 def _handle_chatbot_query(prompt: str) -> None:
     history = st.session_state.setdefault("chat_history", [])
     history.append({"role": "user", "content": prompt})
-    result = answer_query(prompt, k=5)
-    if result.get("error"):
-        history.append({
-            "role": "assistant", "content": result["error"], "sources": [],
-        })
-    else:
-        history.append({
-            "role": "assistant",
-            "content": result["answer"],
-            "sources": [
-                {"title": s["source"], "desc": s["snippet"]}
-                for s in result["sources"]
-            ],
-        })
+    answer = rag_chat(prompt)
+    history.append({"role": "assistant", "content": answer, "sources": []})
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
