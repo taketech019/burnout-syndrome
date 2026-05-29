@@ -53,13 +53,12 @@ load_dotenv()
 
 def get_secret(key: str, default=None):
     """
-    Streamlit Community Cloud에서는 st.secrets에서 설정값을 읽고,
-    Colab/로컬 테스트 중 secrets가 없으면 default 값을 사용한다.
+    우선순위: st.secrets → os.environ (.env 포함) → default
     """
     try:
         return st.secrets[key]
     except Exception:
-        return default
+        return os.environ.get(key, default)
 
 
 APP_NAME = get_secret("APP_NAME", "CounsHelper - 상담 기록 분석 & 보고서 자동화 플랫폼")
@@ -680,58 +679,48 @@ class GeminiAPIFactorExtractor:
             except Exception:
                 return {}
 
-class MockKoalpacaSummarizer:
-    """
-    임시 요약 모델.
-    나중에 4단계에서 Koalpaca 4bit 요약 모델 코드로 교체한다.
-    """
-
-    def summarize(
-        self,
-        script: str,
-        classification: Dict[str, int],
-        factors: Dict[str, int],
-    ) -> str:
-        symptom_items = []
-
-        if factors.get("sleep_disturbance", 0) > 0:
-            symptom_items.append("수면 문제")
-        if factors.get("fatigue", 0) > 0:
-            symptom_items.append("피로감")
-        if factors.get("anxiety", 0) > 0:
-            symptom_items.append("불안감")
-        if factors.get("depressive_mood", 0) > 0:
-            symptom_items.append("우울 관련 호소")
-        if factors.get("social_avoidance", 0) > 0:
-            symptom_items.append("사회적 회피 경향")
-
-        symptom_text = ", ".join(symptom_items) if symptom_items else "뚜렷한 주요 증상 라벨 없음"
-
-        return f"""1. 주요 증상
-내담자는 제공된 상담 내용 기준으로 {symptom_text}을/를 호소하는 것으로 정리된다.
-
-2. 위험 요인
-업무 스트레스, 수면 부족, 피로 누적, 자기비하적 사고, 사회적 회피 가능성을 추가 확인할 필요가 있다.
-자해·자살 관련 발화가 확인되는 경우 상담사가 별도 안전 평가를 수행해야 한다.
-
-3. 개선 요인
-내담자는 자신의 상태를 언어화하고 상담 장면에 참여하고 있으며, 상담 목표와 과제를 설정할 수 있는 가능성이 있다.
-
-4. 상담사 개입 요인
-상담사는 수면 양상 확인, 감정 명명, 자동사고 탐색, 공감 및 지지, 다음 회기 과제 설정을 중심으로 개입할 수 있다.
-
-5. 다음 회기 계획
-다음 회기에서는 수면 양상, 출근 전 불안 상황, 회피 행동, 자기비하적 사고, 현재 대처 방식을 구체적으로 확인한다.
-"""
-        
 class KoalpacaAPISummarizer:
-    """
-    KoAlpaca API 요약 모델 연결 클래스.
+    def __init__(self) -> None:
+        self.gemini_sections: list = []
 
-    현재 역할:
-        - src/summarizer.py의 summarize() 함수를 호출한다.
-        - API가 아직 설정되지 않았거나 실패하면 앱이 깨지지 않도록 안내 문구를 반환한다.
-    """
+    def _call_gemini_section(self, transcript: str, section_title: str, description: str) -> str:
+        """Gemini로 단일 섹션을 생성한다. 오류 시 빈 문자열 반환."""
+        try:
+            api_key = ""
+            model = "gemini-2.5-flash"
+            try:
+                api_key = str(st.secrets.get("GEMINI_API_KEY", "")).strip()
+                model = str(st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")).strip() or "gemini-2.5-flash"
+            except Exception:
+                api_key = os.getenv("GEMINI_API_KEY", "").strip()
+                model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+
+            if not api_key:
+                return ""
+
+            prompt = (
+                f"아래 심리상담 전사 기록을 바탕으로 '{section_title}' 항목을 1~2문단으로 작성해주세요.\n"
+                f"설명: {description}\n"
+                "주의: 마크다운 문법(**, *, #, -, ` 등)을 절대 사용하지 마세요. 임상 진단 단정 표현 금지.\n"
+                '반드시 JSON 형식으로만 답하세요: {"content": "<내용>"}\n\n'
+                f"상담 전사 기록:\n{transcript[:9000]}"
+            )
+
+            resp = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"},
+                },
+                timeout=90,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            raw = data["candidates"][0]["content"]["parts"][0]["text"]
+            return json.loads(raw).get("content", "").strip()
+        except Exception:
+            return ""
 
     def summarize(
         self,
@@ -739,33 +728,70 @@ class KoalpacaAPISummarizer:
         classification: Dict[str, int],
         factors: Dict[str, int],
     ) -> str:
+        self.gemini_sections = []
+
         try:
             from src.summarizer import summarize as koalpaca_summarize
-
             result = koalpaca_summarize(script)
+        except Exception as error:
+            return (
+                f"[KoAlpaca API 연결 오류]\n\n"
+                f"KoAlpaca API 호출 모듈을 실행하는 중 오류가 발생했습니다.\n\n오류 내용:\n{error}"
+            )
 
-            if result.get("ok"):
-                return result.get("text", "").strip()
+        koalpaca_ok = result.get("ok", False)
+        koalpaca_sections = result.get("sections", {}) if koalpaca_ok else {}
 
+        SECTION_MAP = [
+            ("symptoms",             "1. 주요 증상",        "내담자가 호소하는 주요 심리·신체 증상"),
+            ("risk_factors",         "2. 위험 요인",        "악화 가능성 또는 추가 확인이 필요한 위험 요인"),
+            ("improvement_factors",  "3. 개선 요인",        "상담 개입의 발판이 될 수 있는 강점과 자원"),
+            ("intervention_factors", "4. 상담사 개입 요인", "상담사가 다음 회기에서 초점을 맞출 개입 포인트"),
+        ]
+        SECTION_KEY_MAP = {
+            "symptoms":             "report_section_1",
+            "risk_factors":         "report_section_2",
+            "improvement_factors":  "report_section_3",
+            "intervention_factors": "report_section_4",
+        }
+
+        parts = []
+        for key, numbered_heading, description in SECTION_MAP:
+            content = koalpaca_sections.get(key, "").strip()
+            body = ""
+            if content:
+                lines = content.split("\n", 1)
+                body = lines[1].strip() if len(lines) > 1 else ""
+
+            if not body:
+                body = self._call_gemini_section(script, numbered_heading.split(". ", 1)[1], description)
+                if body:
+                    self.gemini_sections.append(SECTION_KEY_MAP[key])
+
+            if body:
+                parts.append(f"{numbered_heading}\n{body}")
+
+        section5_body = self._call_gemini_section(
+            script,
+            "다음 회기 계획 추천",
+            "다음 회기에서 다룰 주제와 상담사가 준비할 사항",
+        )
+        if section5_body:
+            parts.append(f"5. 다음 회기 계획 추천\n{section5_body}")
+            self.gemini_sections.append("report_section_5")
+
+        if parts:
+            return "\n\n".join(parts)
+
+        if not koalpaca_ok:
             status = result.get("status", "unknown")
             message = result.get("message", "KoAlpaca API 호출 결과를 확인할 수 없습니다.")
+            return (
+                f"[KoAlpaca API 연결 상태: {status}]\n\n{message}\n\n"
+                "KoAlpaca 호스팅이 완료되면 Streamlit Secrets에 KOALPACA_ENDPOINT_URL과 KOALPACA_API_KEY를 입력한 뒤 다시 실행하세요."
+            )
 
-            return f"""[KoAlpaca API 연결 상태: {status}]
-
-{message}
-
-현재 보고서 생성 기능은 KoAlpaca API 연결 자리만 준비된 상태입니다.
-KoAlpaca 호스팅이 완료되면 Streamlit Secrets에 KOALPACA_ENDPOINT_URL과 KOALPACA_API_KEY를 입력한 뒤 다시 실행하세요.
-"""
-
-        except Exception as error:
-            return f"""[KoAlpaca API 연결 오류]
-
-KoAlpaca API 호출 모듈을 실행하는 중 오류가 발생했습니다.
-
-오류 내용:
-{error}
-"""
+        return result.get("text", "")
 
 # =========================================================
 # 5. 모델 로더
@@ -811,25 +837,7 @@ def load_factor_model():
 
 
 def load_summarizer_model():
-    """
-    요약보고서 생성 모델 로더.
-
-    MODEL_BACKEND 값에 따라 요약 백엔드를 선택한다.
-
-    - mock: 기존 mock 요약 사용
-    - koalpaca_api: src/summarizer.py를 통해 KoAlpaca API 호출
-    """
-    if MODEL_BACKEND == "mock":
-        return MockKoalpacaSummarizer()
-
-    if MODEL_BACKEND == "koalpaca_api":
-        return KoalpacaAPISummarizer()
-
-    if MODEL_BACKEND == "aihub_local":
-        # 향후 로컬 KoAlpaca 또는 AI Hub 모델을 직접 로딩할 때 사용할 자리
-        return MockKoalpacaSummarizer()
-
-    return MockKoalpacaSummarizer()
+    return KoalpacaAPISummarizer()
 
 # =========================================================
 # 6. 분석 파이프라인
@@ -892,6 +900,7 @@ def run_analysis(script: str) -> Dict[str, Any]:
         "classification": classification,
         "factors": factors,
         "summary": summary,
+        "gemini_sections": getattr(summarizer, "gemini_sections", []),
         "model_info": {
             "backend": MODEL_BACKEND,
             "factor_backend": FACTOR_BACKEND,
@@ -903,7 +912,7 @@ def run_analysis(script: str) -> Dict[str, Any]:
             "classifier_raw_scores": getattr(classifier, "last_result", {}).get("raw_scores", {}),
             "classifier": KLUEBERT_MODEL_NAME if MODEL_BACKEND != "mock" else "MockKlueBERTClassifier",
             "factor_extractor": "Gemini API" if FACTOR_BACKEND == "gemini_api" else "MockFactorExtractor",
-            "summarizer": "KoAlpaca API" if MODEL_BACKEND == "koalpaca_api" else "MockKoalpacaSummarizer",
+            "summarizer": "KoAlpaca API",
             "factor_status": getattr(factor_model, "last_result", {}).get("status", "success" if FACTOR_BACKEND == "mock" else "unknown"),
             "factor_message": getattr(factor_model, "last_result", {}).get("message", ""),  
         },
@@ -8950,10 +8959,12 @@ def render_report():
         [f"{row['요인']}({row['점수']})" for _, row in factor_df.iterrows() if int(row["점수"]) > 0]
     ) or "뚜렷하게 상승한 세부 요인은 제한적입니다."
 
+    gemini_sections_result = result.get("gemini_sections", [])
+
     raw_section_1 = extract_section(report_text, 1, "")
     section_1 = clean_report_section_text(raw_section_1)
 
-    if is_noisy_report_section(section_1):
+    if is_noisy_report_section(section_1) and "report_section_1" not in gemini_sections_result:
         section_1 = build_clean_symptom_section(
             classification=classification,
             factors=result.get("factors", {}),
@@ -9264,13 +9275,19 @@ def render_report():
         unsafe_allow_html=True,
     )
 
+    gemini_used = result.get("gemini_sections", [])
+
     for title, key, value in report_sections:
         with st.container(border=True):
+            gemini_badge = (
+                '<span style="font-size:0.72rem;color:#aaa;margin-left:0.4rem;">(gemini로 생성됨)</span>'
+                if key in gemini_used else ""
+            )
             st.markdown(
                 f"""
                 <div class="report-section-head">
                     <div class="report-section-title">
-                        {title}
+                        {title}{gemini_badge}
                         <span class="report-edit-badge">편집 가능</span>
                     </div>
                     <div class="report-edit-icon">edit</div>
