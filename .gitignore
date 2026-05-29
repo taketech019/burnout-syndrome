@@ -1,8 +1,4 @@
 # 데이터 파일 무시, 폴더 구조(.gitkeep)는 유지
-!data/**/.gitkeep
-chroma_db/
-*.sqlite3
-*.db
 
 # 환경변수
 .env
@@ -67,7 +63,6 @@ hf-space-remote/
 
 !chroma_db/
 !chroma_db/**
-data/processed/counseling_chunks.jsonl
 
 #원본/대용량 데이터
 data/local/
