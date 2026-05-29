@@ -22,7 +22,7 @@ import requests
 # - max_position_embeddings=2048 토큰. 한국어 ~3.5 char/token. 안전선 9000자.
 _MIN_INPUT_CHARS = 5000
 _MAX_INPUT_CHARS = 10000
-_MAX_NEW_TOKENS = 2048
+_MAX_NEW_TOKENS = 1500
 _TIMEOUT = 300
 
 _SECTIONS = {
