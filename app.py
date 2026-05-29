@@ -1708,6 +1708,16 @@ def generate_rag_answer_with_gemini(
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
         resp = requests.post(url, json=payload, timeout=60)
         result = resp.json()
+
+        if "error" in result:
+            return f"Gemini API 오류: {result['error'].get('message', str(result['error']))}"
+
+        if "promptFeedback" in result and result["promptFeedback"].get("blockReason"):
+            return f"콘텐츠 안전 필터로 답변이 차단되었습니다: {result['promptFeedback']['blockReason']}"
+
+        if not result.get("candidates"):
+            return f"Gemini 응답에 candidates가 없습니다.\n응답 내용: {json.dumps(result, ensure_ascii=False)[:300]}"
+
         answer = result["candidates"][0]["content"]["parts"][0]["text"]
 
         if not answer:
