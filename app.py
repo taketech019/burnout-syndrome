@@ -7,6 +7,7 @@ import json
 import base64
 import hashlib
 import os
+import requests
 import chromadb
 import streamlit as st
 from sentence_transformers import SentenceTransformer
@@ -1646,10 +1647,10 @@ def generate_rag_answer_with_gemini(
         )
 
     try:
-        import google.generativeai as genai
-
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        )
 
         prompt = f"""
 당신은 심리상담사를 보조하는 AI입니다.
@@ -1695,9 +1696,10 @@ def generate_rag_answer_with_gemini(
 - 사용한 출처 번호만 간단히 표시
 """
 
-        response = model.generate_content(prompt)
-
-        answer = getattr(response, "text", "")
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        resp = requests.post(url, json=payload, timeout=60)
+        result = resp.json()
+        answer = result["candidates"][0]["content"]["parts"][0]["text"]
 
         if not answer:
             return "Gemini 응답이 비어 있습니다. API 응답 상태를 확인하세요."
