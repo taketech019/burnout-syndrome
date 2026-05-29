@@ -56,7 +56,6 @@ hf-upload/
 hf-space/
 hf-space-remote/
 
-data/processed/*
 !data/processed/.gitkeep
 
 !data/references/
@@ -64,3 +63,7 @@ data/processed/*
 
 !chroma_db/
 !chroma_db/**
+
+#원본/대용량 데이터
+data/local/
+data/processed/counseling_chunks.jsonl
