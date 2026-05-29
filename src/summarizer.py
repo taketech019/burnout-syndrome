@@ -21,8 +21,8 @@ import requests
 # - 학습 분포 median 22,872자. 3000자에서는 4섹션 트리거 실패, 5000자부터 partial pass.
 # - max_position_embeddings=2048 토큰. 한국어 ~3.5 char/token. 안전선 9000자.
 _MIN_INPUT_CHARS = 5000
-_MAX_INPUT_CHARS = 10000
-_MAX_NEW_TOKENS = 1500
+_MAX_INPUT_CHARS = 7000
+_MAX_NEW_TOKENS = 1024
 _TIMEOUT = 300
 
 _SECTIONS = {
