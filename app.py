@@ -53,13 +53,12 @@ load_dotenv()
 
 def get_secret(key: str, default=None):
     """
-    Streamlit Community Cloud에서는 st.secrets에서 설정값을 읽고,
-    Colab/로컬 테스트 중 secrets가 없으면 default 값을 사용한다.
+    우선순위: st.secrets → os.environ (.env 포함) → default
     """
     try:
         return st.secrets[key]
     except Exception:
-        return default
+        return os.environ.get(key, default)
 
 
 APP_NAME = get_secret("APP_NAME", "CounsHelper - 상담 기록 분석 & 보고서 자동화 플랫폼")
