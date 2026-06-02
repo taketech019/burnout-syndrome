@@ -12,6 +12,7 @@ import chromadb
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 import re
+import threading
 from datetime import datetime
 from html import escape as html_escape
 from pathlib import Path
@@ -1081,6 +1082,7 @@ def select_session(session_name: str):
     st.session_state.selected_session = session_name
     st.session_state.record_mode = "existing"
     st.session_state.analysis_result = None
+    st.session_state.summarizer_status = None
 
     key = (st.session_state.selected_client, session_name)
 
@@ -1112,6 +1114,7 @@ def reset_new_session_form_state():
 
     st.session_state.dialogue_rows = get_empty_dialogue_rows()
     st.session_state.analysis_result = None
+    st.session_state.summarizer_status = None
 
 
 def reset_new_session_content_state():
@@ -1130,6 +1133,7 @@ def start_new_session():
     st.session_state.new_session_date = datetime.now().date()
     st.session_state.new_session_input_mode = "발화 단위 입력"
     st.session_state.analysis_result = None
+    st.session_state.summarizer_status = None
 
 
 def cancel_new_session():
@@ -1239,10 +1243,12 @@ def save_new_session(script: str, run_ai: bool = False) -> bool:
     if run_ai:
         st.session_state.record_mode = "existing"
         st.session_state.analysis_result = run_analysis(clean_script)
+        st.session_state.summarizer_status = "done"
         go_page("분석 대시보드")
     else:
         st.session_state.record_mode = "existing"
         st.session_state.analysis_result = None
+        st.session_state.summarizer_status = None
         st.session_state.new_session_save_success = True
         go_page("상담내역 기록·추가")
 
@@ -1277,6 +1283,7 @@ def open_draft_session_editor(session_name: str):
     st.session_state.pop("new_session_dialogue_editor", None)
     st.session_state.record_mode = "draft"
     st.session_state.analysis_result = None
+    st.session_state.summarizer_status = None
     go_page("상담내역 기록·추가")
 
 
@@ -1312,6 +1319,7 @@ def register_new_client(name: str, gender: str, age: str, region: str, memo: str
     st.session_state.record_mode = "new"
     st.session_state.dialogue_rows = get_empty_dialogue_rows()
     st.session_state.analysis_result = None
+    st.session_state.summarizer_status = None
     st.session_state.patient_home_tab = "내담자 정보"
     go_page("내담자 홈")
     st.success(f"{clean_name} 내담자를 등록했습니다.")
@@ -5364,6 +5372,7 @@ def render_sidebar():
                             st.session_state.dialogue_rows = DEFAULT_DIALOGUE.copy()
 
                         st.session_state.analysis_result = None
+                        st.session_state.summarizer_status = None
                         go_page("내담자 홈")
                         st.rerun()
 
@@ -5600,6 +5609,20 @@ def get_client_sessions_sorted() -> pd.DataFrame:
     return client_sessions.sort_values("_session_order", ascending=True).drop(columns=["_session_order"])
 
 
+def _run_summarizer_background(script: str, classification, factors):
+    """백그라운드 스레드: KoAlpaca summarizer 실행 후 session_state에 결과 저장."""
+    try:
+        summarizer = load_summarizer_model()
+        summary = summarizer.summarize(script, classification, factors)
+        summary = soften_diagnostic_expression(summary)
+        st.session_state.analysis_result["summary"] = summary
+        st.session_state.analysis_result["gemini_sections"] = getattr(summarizer, "gemini_sections", [])
+    except Exception as e:
+        st.session_state.analysis_result["summary"] = f"[요약 생성 실패: {e}]"
+    finally:
+        st.session_state.summarizer_status = "done"
+
+
 def analyze_current_session_if_needed():
     if st.session_state.analysis_result is not None:
         return
@@ -5610,7 +5633,40 @@ def analyze_current_session_if_needed():
         return
 
     with st.spinner("선택 회기 분석 결과를 준비하는 중입니다..."):
-        st.session_state.analysis_result = run_analysis(script)
+        classifier = load_classifier_model()
+        factor_model = load_factor_model()
+        classification = classifier.predict(script)
+        factors = factor_model.extract(script, classification)
+
+    st.session_state.analysis_result = {
+        "script": script,
+        "classification": classification,
+        "factors": factors,
+        "summary": None,
+        "gemini_sections": [],
+        "model_info": {
+            "backend": MODEL_BACKEND,
+            "factor_backend": FACTOR_BACKEND,
+            "classifier_backend": CLASSIFIER_BACKEND,
+            "classifier": "KlueBERT API" if CLASSIFIER_BACKEND == "kluebert_api" else "MockKlueBERTClassifier",
+            "classifier_status": getattr(classifier, "last_result", {}).get("status", "success" if CLASSIFIER_BACKEND == "mock" else "unknown"),
+            "classifier_message": getattr(classifier, "last_result", {}).get("message", ""),
+            "classifier_scores": getattr(classifier, "last_result", {}).get("scores", {}),
+            "classifier_raw_scores": getattr(classifier, "last_result", {}).get("raw_scores", {}),
+            "factor_extractor": "Gemini API" if FACTOR_BACKEND == "gemini_api" else "MockFactorExtractor",
+            "summarizer": "KoAlpaca API",
+            "factor_status": getattr(factor_model, "last_result", {}).get("status", "success" if FACTOR_BACKEND == "mock" else "unknown"),
+            "factor_message": getattr(factor_model, "last_result", {}).get("message", ""),
+        },
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    st.session_state.summarizer_status = "running"
+    threading.Thread(
+        target=_run_summarizer_background,
+        args=(script, classification, factors),
+        daemon=True,
+    ).start()
 
 
 def risk_status(score: float) -> str:
@@ -8553,6 +8609,12 @@ def render_report():
 
     if result is None:
         st.info("아직 분석 결과가 없습니다. 먼저 상담내역 기록·추가 화면에서 AI 분석을 실행하세요.")
+        return
+
+    if result.get("summary") is None:
+        st.info("AI 요약을 생성하는 중입니다. 잠시 후 새로고침 버튼을 눌러주세요.")
+        if st.button("새로고침", key="report_summary_refresh"):
+            st.rerun()
         return
 
     report_client_id = str(st.session_state.selected_client)
